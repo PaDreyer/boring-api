@@ -1,6 +1,6 @@
-import {Setup} from "../../core";
+import { SetupContext } from "../../core/setupContext";
 
-export async function setup(ctx: Setup) {
+export async function setup(setupCtx: SetupContext) {
     console.info("Initializing database");
-    ctx.set("database", "database");
+    setupCtx.set("database", "database");
 }

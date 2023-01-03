@@ -1,125 +1,158 @@
-import {readdirSync, fstatSync, Dirent} from "fs";
-import {basename, normalize, join, parse} from 'path';
-import express, { Request, Response } from 'express';
-import {Logger} from "./logger";
-import {getLogger} from "./utils";
-
-export class Setup extends Map {
-    mergeWithDefault() {
-        if (!this.has("logger")) {
-            this.set("logger", new Logger());
-        }
-    }
-}
-
-export class Context extends Map {
-    constructor() {
-        super();
-    }
-}
-
-enum FileType {
-    handler= "handler",
-    folder = "folder",
-    input = "input",
-    output = "output",
-    unknown = "unknown",
-    setup = "setup",
-}
-
-type File = {
-    type: FileType;
-    meta?: any;
-}
-
-type Node = {
-    parent: Node | undefined;
-    nodes: Node[];
-    name: string;
-    path: string;
-    file: File;
-    depth: number;
-}
-
-function getFilesOfType(nodes: Node[], type: FileType) {
-    const handler: Node[] = [];
-
-    for (const node of nodes) {
-        if (node.file.type === type) {
-            handler.push(node);
-        } else if (node.file.type === FileType.folder) {
-            handler.push(...getFilesOfType(node.nodes, type));
-        }
-    }
-
-    return handler;
-}
-
-function createExpressHandler(setup: Setup, handler: (ctx: Context) => Promise<unknown>) {
-    return async (req: Request, res: Response) => {
-        const logger = getLogger(setup);
-        const ctx = new Context();
-        const startTime = performance.now();
-        res.on("finish", () => {
-            logger.http(req.method, req.path, res.statusCode, performance.now() - startTime);
-        })
-        await handler(ctx);
-        res.end();
-    }
-}
+import {readdirSync} from "fs";
+import {basename, extname, join, normalize} from 'path';
+import express, {NextFunction, Request, Response} from 'express';
+import {SetupContext} from "./setupContext";
+import {
+    createExpressErrorHandler,
+    createExpressHandler,
+    filterErrorHandlerNodes,
+    getFilesOfType,
+    getLogger
+} from './utils';
+import {ApiFile, ApiFileType, FileNode} from "./node";
+import {Context} from "./context";
 
 
 export class BoringApi {
     async scan(path: string) {
         const app = express();
 
-        const tree = this.scanDir(path);
+        const tree = this.scanTree(path);
 
-        const setupHandlers = getFilesOfType(tree, FileType.setup)
-        const setup = new Setup();
+        const setupHandlers = getFilesOfType(tree, ApiFileType.setup)
 
+        const setup = new SetupContext();
         for (const setupHandler of setupHandlers) {
             await setupHandler.file.meta.setup(setup);
         }
 
         setup.mergeWithDefault();
 
-        const handlers = getFilesOfType(tree, FileType.handler);
+
+        app.use((req, res, next) => {
+            const ctx =  new Context(req, res);
+            ctx.set("setup", setup);
+            ctx.set("headers", req.headers);
+            ctx.set("query", req.query);
+            ctx.set("params", req.params);
+            req.app.locals.ctx = ctx;
+            return next();
+        })
+
+
+        const authenticationMiddleware = getFilesOfType(tree, ApiFileType.base)
+            .find( node => node.file.name === "authentication");
+
+        if (authenticationMiddleware) {
+            app.use(async (req, res, next) => {
+                try {
+                    await authenticationMiddleware.file.meta.handler(req.app.locals.ctx);
+                } catch(e) {
+                    return next(e);
+                }
+
+                return next();
+            })
+        }
+
+        const authorizationHandler= getFilesOfType(tree, ApiFileType.base)
+            .find( node => node.file.name === "authorization");
+
+        const envelopeHandler = getFilesOfType(tree, ApiFileType.base)
+            .find( node => node.file.name === "envelope");
+
+        const handlers = getFilesOfType(tree, ApiFileType.handler);
         handlers.forEach( handler => {
             let path = this.getNodePath(handler);
-            console.log("path: ", path);
             // @ts-ignore
-            app[handler.name](path, createExpressHandler(setup, handler.file.meta.handler));
+            app[handler.file.name](path, (req: Request, res: Response, next: NextFunction) => {
+                const ctx = req.app.locals.ctx;
+
+                const setup = ctx.get("setup");
+                const logger = getLogger(setup);
+                const startTime = performance.now();
+                res.on("finish", () => {
+                    logger.http(req.method, req.path, res.statusCode, performance.now() - startTime);
+                })
+
+                if (!ctx.has("session") && (handler.file.meta.authentication === true || handler.file.meta.authorization !== undefined)) {
+                    res.status(401);
+                    return next(new Error("401"))
+                }
+
+                if (handler.file.meta.authorization !== undefined && authorizationHandler) {
+                    try {
+                        authorizationHandler.file.meta.handler(ctx, handler.file.meta.authorization);
+                    } catch(e) {
+                        res.status(403)
+                        return next(e);
+                    }
+                }
+
+                if (handler.file.meta.body !== undefined) {
+                    try {
+                        handler.file.meta.body.parse(ctx.get("body"))
+                    } catch(e) {
+                        res.status(400);
+                        return next(e);
+                    }
+                }
+
+
+                handler.file.meta.handler(ctx).catch((e: any) => next(e));
+
+                if (handler.file.meta.envelope == true) {
+                    envelopeHandler?.file.meta.handler(ctx).catch((e: any) => next(e));
+                }
+
+                ctx.send(ctx.payload)
+            });
         });
-        console.log("start listening")
+
+
+
+        const errors = filterErrorHandlerNodes(tree);
+        const notFoundNode = errors.find(node => node.file.name === "404");
+        if (notFoundNode) {
+            app.use(createExpressHandler(setup, notFoundNode.file.meta.handler));
+        }
+
+        const errorNode = errors.find(node => node.file.name === "500");
+        if (errorNode) {
+            app.use(createExpressErrorHandler(setup, errorNode.file.meta.handler))
+        }
+
+        const logger = getLogger(setup);
+        logger.info("Start listening on port " + 4040);
 
         app.listen(4040);
     }
 
-    private scanDir(dir: string, parent?: Node, depth?: number): Node[] {
-        const tree: Node[] = [];
+    private scanTree(dir: string, parent?: FileNode, depth?: number): FileNode[] {
+        const tree: FileNode[] = [];
         const files = readdirSync(dir, { withFileTypes: true });
 
         for (const file of files) {
-            let node: Node;
+            let node: FileNode;
 
             if (file.isDirectory()) {
                 node = {
                     parent,
                     nodes: [],
-                    name: basename(file.name, ".ts"),
-                    path: `${dir}/${file.name}`,
-                    file: { type: FileType.folder },
+                    file: {
+                        type: ApiFileType.folder,
+                        name: basename(file.name, ".ts"),
+                        extension: extname(file.name),
+                        path: `${dir}/${file.name}`,
+                    },
                     depth: depth ?? 0,
                 };
-                node.nodes = this.scanDir(`${dir}/${file.name}`, node, 1 + (depth ?? 0));
+                node.nodes = this.scanTree(`${dir}/${file.name}`, node, 1 + (depth ?? 0));
             } else {
                 node = {
                     parent,
                     nodes: [],
-                    name: basename(file.name, ".ts"),
-                    path: `${dir}/${file.name}`,
-                    file: this.getFileData(`${dir}/${file.name}`, parent),
+                    file: this.getFileData(`${dir}/${file.name}`, basename(file.name, ".ts"), extname(file.name), parent),
                     depth: depth ?? 0,
                 };
             }
@@ -129,24 +162,54 @@ export class BoringApi {
         return tree;
     }
 
-    private getFileData(file: string, parent?: Node): File {
-        if (parent && parent.name === "_setup") {
+    private getFileData(file: string, name: string, extension: string, parent?: FileNode): ApiFile {
+        if (parent && parent.file.name === "_setup") {
             return {
-                type: FileType.setup,
+                type: ApiFileType.setup,
+                path: file,
+                name,
+                extension,
                 meta: {
                     ...require(file),
                 }
             }
         }
 
-        const fileName = basename(file, ".ts")
+        if (parent && parent.file.name === '_base') {
+            const data = require(file)
+            return {
+                type: ApiFileType.base,
+                path: file,
+                name,
+                extension,
+                meta: {
+                    ...data,
+                }
+            }
+        }
 
         if([
             "get", "post", "delete", "patch", "options", "head"
-        ].includes(fileName)) {
+        ].includes(name)) {
             const data = require(file)
             return {
-                type: FileType.handler,
+                type: ApiFileType.handler,
+                path: file,
+                name,
+                extension,
+                meta: {
+                    ...data,
+                }
+            }
+        }
+
+        if(name === "not_found") {
+            const data = require(file);
+            return {
+                type: ApiFileType.notfound,
+                path: file,
+                name,
+                extension,
                 meta: {
                     ...data,
                 }
@@ -154,10 +217,14 @@ export class BoringApi {
         }
 
 
-        if(/^\[[a-zA-Z]+\\]$/.test(fileName)) {
+        // TODO: remove
+        if(/^\[[a-zA-Z]+\\]$/.test(name)) {
             const data = require(file)
             return {
-                type: FileType.handler,
+                type: ApiFileType.handler,
+                path: file,
+                name,
+                extension,
                 meta: {
                     ...data,
                 }
@@ -177,25 +244,33 @@ export class BoringApi {
             default:
                 console.info(`Unsupported file type '${basename(file)}'`);
                 return {
-                    type: FileType.unknown,
+                    path: file,
+                    name,
+                    extension,
+                    type: ApiFileType.unknown,
                 }
         }
     }
 
-    private getNodePath(node: Node) {
+    private getNodePath(node: FileNode) {
         let paths: string[] = [];
-        let currentNode: Node | undefined = node;
+        let currentNode: FileNode | undefined = node;
 
         do {
             if (currentNode) {
-                paths.push(currentNode.name);
+                paths.push(currentNode.file.name);
                 currentNode = currentNode.parent;
             }
-        } while (currentNode?.name);
+        } while (currentNode?.file.name);
 
-        return `/${paths.reverse().join("/")}`;
+        paths = paths.reverse();
+        paths.pop();
+        return `/${paths.join("/")}`;
     }
 }
+
+
+
 
 const test = new BoringApi();
 test.scan(normalize(join(process.cwd(), "src", "endpoints")));

@@ -1,5 +1,6 @@
-import {Context} from "../../core";
+import {SetupContext} from "../../core/setupContext";
 
-export async function setup(ctx: Context) {
-    ctx.set("report", "report");
+
+export async function setup(setupCtx: SetupContext) {
+    setupCtx.set("report", "report");
 }

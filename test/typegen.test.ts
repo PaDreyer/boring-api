@@ -20,7 +20,7 @@ function writeProject(root: string, compilerOptions: Record<string, unknown> = {
             skipLibCheck: true,
             baseUrl: ".",
             paths: {
-                "boring-api": [join(repository, "src", "index.ts")],
+                "@boringapi/core": [join(repository, "src", "index.ts")],
                 zod: [join(repository, "node_modules", "zod")],
             },
             ...compilerOptions,

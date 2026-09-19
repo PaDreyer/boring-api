@@ -19,12 +19,12 @@ Das API-Verzeichnis gehört der Anwendung. Es kann beliebig heißen; die Anwendu
 
 ## Installation
 
-`boring-api` ist das veröffentlichbare Node-Modul. Es installiert den ausführbaren Befehl `boring` über das `bin`-Feld des Pakets:
+`@boringapi/core` ist das veröffentlichte Node-Modul. Es installiert den ausführbaren Befehl `boring` über das `bin`-Feld des Pakets:
 
 ```bash
-npm install boring-api zod
-# oder: pnpm add boring-api zod
-# oder: yarn add boring-api zod
+npm install @boringapi/core zod
+# oder: pnpm add @boringapi/core zod
+# oder: yarn add @boringapi/core zod
 ```
 
 Nach der lokalen Installation ist der Befehl in den Package-Scripts der Anwendung verfügbar. Er kann außerdem mit `npx boring`, `pnpm exec boring` oder `yarn boring` direkt ausgeführt werden.
@@ -66,7 +66,7 @@ Diese Scripts gehören in die `package.json` der Anwendung, die Boring API verwe
 ```ts
 // server.ts in der Anwendung des Nutzers
 import { join } from "path";
-import { BoringApi } from "boring-api";
+import { BoringApi } from "@boringapi/core";
 
 async function main() {
     const app = await new BoringApi().createApp(join(__dirname, "api"));
@@ -88,7 +88,7 @@ Die Namen `get.ts`, `post.ts`, `put.ts`, `patch.ts`, `delete.ts`, `head.ts` und 
 ```ts
 // api/articles/[id]/get.ts
 import z from "zod";
-import { HttpError } from "boring-api";
+import { HttpError } from "@boringapi/core";
 import type { GetHandler } from "./$types";
 
 type ArticleStore = {
@@ -194,6 +194,19 @@ yarn typecheck
 yarn test
 yarn build      # kompiliert nur die Bibliothek nach dist
 ```
+
+## Veröffentlichung
+
+Ein Tag `v<version>` startet den Release-Workflow. Der Tag muss exakt zur Version in `package.json` passen, beispielsweise `v0.0.1` zu `"version": "0.0.1"`. Vor der Veröffentlichung laufen Beispielprüfung, TypeScript-Prüfung, Tests und Build. Anschließend erzeugt der Workflow ein npm-Tarball, veröffentlicht es über npm Trusted Publishing und erstellt ein GitHub Release mit Prüfsumme und automatisch erzeugten Release Notes.
+
+Der Trusted Publisher für `@boringapi/core` verwendet diese GitHub-Actions-Daten:
+
+- Organisation oder Benutzer: `PaDreyer`
+- Repository: `boring-api`
+- Workflow-Datei: `release.yml`
+- Erlaubte Aktion: `npm publish`
+
+Da ein Trusted Publisher erst für ein bereits existierendes npm-Paket eingerichtet werden kann, wird die erste Version einmalig interaktiv mit `npm publish --access public` veröffentlicht. Danach wird der Trusted Publisher in den Paketeinstellungen aktiviert; weitere Versionen entstehen ausschließlich durch passende Git-Tags.
 
 Der Beispielserver hört standardmäßig auf Port 4040; `PORT` kann ihn ändern.
 

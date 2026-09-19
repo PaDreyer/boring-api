@@ -4,7 +4,7 @@
     "module": "commonjs",
     "moduleResolution": "node",
     "baseUrl": ".",
-    "paths": { "boring-api": ["src/index.ts"] },
+    "paths": { "@boringapi/core": ["src/index.ts"] },
     "rootDirs": [".", ".boring/types"],
     "rootDir": "src",
     "outDir": "dist",

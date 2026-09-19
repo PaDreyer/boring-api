@@ -196,7 +196,7 @@ async function dev(root: string, apiDirectory: string, port: number): Promise<vo
 }
 
 function usage(): void {
-    console.info(`boring-api
+    console.info(`Boring API
 
 Usage:
   boring dev [api-directory] [--port 4040]

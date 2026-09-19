@@ -1,4 +1,4 @@
-import { createOrder, order } from "../../modules/orders/schemas";
+import { createOrder, order } from "$modules/orders/schemas";
 import type { PostHandler } from "./$types";
 
 export const body = createOrder;

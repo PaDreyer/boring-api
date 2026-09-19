@@ -1,4 +1,4 @@
-import { order, orderParams } from "../../../modules/orders/schemas";
+import { order, orderParams } from "$modules/orders/schemas";
 import type { GetHandler } from "./$types";
 
 export const params = orderParams;

@@ -11,7 +11,12 @@
       "require": "./dist/index.js",
       "default": "./dist/index.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./register": {
+      "types": "./dist/register.d.ts",
+      "require": "./dist/register.js",
+      "default": "./dist/register.js"
+    }
   },
   "files": ["dist", "README.md", "LICENSE"],
   "engines": { "node": ">=18" },
@@ -32,10 +37,11 @@
     "example:check": "ts-node src/cli.ts check examples/basic/api",
     "example:inspect": "ts-node src/cli.ts inspect examples/basic/api",
     "example:sync": "ts-node src/cli.ts sync examples/basic/api",
+    "example:build": "ts-node src/cli.ts build examples/basic/api --project tsconfig.example.json",
     "example:start": "ts-node examples/basic/server.ts",
     "build": "node scripts/build.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --test -r ts-node/register test/*.test.ts",
+    "test": "node --test -r ts-node/register -r ./test/register.ts test/*.test.ts",
     "prepack": "node scripts/build.js"
   },
   "dependencies": {

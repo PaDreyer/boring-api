@@ -38,6 +38,7 @@ boring dev                 # load ./api, generate types, and restart on changes
 boring check               # generate types and check the project with TypeScript
 boring inspect             # find existing routes, operations, schemas and hooks
 boring inspect --json      # the same catalog in a versioned machine-readable format
+boring build               # check and compile the consumer application
 boring start               # start the compiled API without a watcher
 ```
 
@@ -46,10 +47,11 @@ The API directory defaults to `./api`. Pass another path as a positional argumen
 ```bash
 boring dev src/api --port 3000
 boring check src/api
+boring build src/api
 boring start dist/api --port 3000
 ```
 
-`boring dev` loads TypeScript through `ts-node`, generates types before every restart, and watches the API directory and its sibling `modules` and `infra` directories, including directories added during development. For example, `boring dev src/api` watches `src/api`, `src/modules` and `src/infra`. Files elsewhere are not watched. `boring check` checks TypeScript, file conventions, route/hook export contracts, and application import boundaries. Architecture checks are mandatory. `boring start` is intended for compiled JavaScript. `boring sync` only generates the type files.
+`boring dev` loads TypeScript through `ts-node` and the Boring API import transformer, generates types before every restart, and watches the API directory and its sibling `modules` and `infra` directories, including directories added during development. For example, `boring dev src/api` watches `src/api`, `src/modules` and `src/infra`. Files elsewhere are not watched. `boring check` checks TypeScript, file conventions, route/hook export contracts, and application import boundaries. Architecture checks are mandatory. `boring start` loads compiled JavaScript. `boring sync` generates types and the editor configuration. Use `--project path/to/tsconfig.json` with `dev`, `check`, `inspect` or `build` to select another TypeScript configuration.
 
 Add these scripts to the `package.json` of an application that uses Boring API:
 
@@ -59,6 +61,7 @@ Add these scripts to the `package.json` of an application that uses Boring API:
     "dev": "boring dev",
     "check": "boring check",
     "inspect": "boring inspect",
+    "build": "boring build",
     "start": "boring start dist/api"
   }
 }
@@ -84,13 +87,102 @@ main().catch(error => {
 
 `createApp(directory)` returns an Express application. `listen(directory, port)` starts and returns an HTTP server directly. The loader scans the specified directory at startup and requires loadable `.ts` or `.js` files.
 
+### Module shortcuts, editor support and builds
+
+Use `$modules/<name>/schemas` for shared contracts and `$modules/<name>/facade`
+for business operations where the import boundaries permit them. `$modules/`
+always names the `modules/` directory beside the selected API directory:
+`boring dev src/http` maps it to `src/modules/`. Imports within the same module
+can stay relative. The shortcut does not grant access to another module's
+private files or let endpoints import facades directly.
+
+Run `boring sync src/api` once after a fresh checkout and extend the generated
+configuration. For an application under `src/`:
+
+```json
+{
+  "extends": "./.boring/tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"]
+}
+```
+
+The generated `paths`, `baseUrl` and `rootDirs` settings give the ordinary
+TypeScript language service import-path and member completion, hover types,
+definition navigation, symbol rename and auto-imports. No Boring API editor
+extension, language server or running development server is needed. Configure
+your editor to prefer non-relative imports if it should always suggest the
+shortcut. The same configuration supports the generated `./$types` imports.
+
+An application's own `paths` object replaces inherited mappings. Preserve the
+generated `$modules/*` entry when adding other aliases; targets are relative to
+the effective `baseUrl`. `check`, `inspect` and `build` report `BORING108` at
+affected imports if the editor would resolve the shortcut differently. Custom
+aliases still need their own runtime/build support: only `$modules/` is rewritten.
+One generated configuration describes one selected application; separate
+applications should have separate consumer project roots/configurations.
+
+`boring build src/api` runs the same mandatory checks as `boring check`, then
+compiles the application to CommonJS. It uses the project's `rootDir` and
+`outDir`, defaulting to the API's parent directory and `<project>/dist`.
+The build rewrites `$modules` imports, re-exports, literal dynamic imports and
+CommonJS requires to relative file paths. These paths follow TypeScript's emitted
+extensions, including `.jsx` with `jsx: "preserve"`. Declaration output also
+receives resolved paths, including nested import types, and the generated handler
+types. Source maps retain source locations. The output runs with ordinary Node
+or `boring start dist/api`.
+
+Build output must stay inside the consumer project and outside application source
+and `.boring/types`. The first build requires an empty output directory; subsequent
+successful builds replace their own output, removing stale routes. The default
+`dist` directory is excluded from TypeScript's default file search, just like an
+explicit `outDir`. Failed checks
+leave the previous build intact. This command does not support `outFile`, separate
+`declarationDir`, `composite`, `incremental` or declaration-only builds. It does not
+bundle dependencies or copy arbitrary assets. Plain `tsc` does not rewrite the shortcut.
+
+`boring dev` uses the same import transformer through `ts-node`. For JavaScript
+modules with separate `.d.ts` declarations, the editor uses the declarations and
+the source compiler loads the executable JavaScript companion. For a custom
+source server or test runner, register it **before loading application modules**
+in a small JavaScript bootstrap outside the scanned API directory:
+
+```js
+// bootstrap.cjs
+const { join } = require("node:path");
+const { registerTypeScript } = require("@boringapi/core/register");
+const stop = registerTypeScript(join(__dirname, "src/api"));
+require("./src/server.ts");
+// Call stop() when the compiler is no longer needed.
+```
+
+Run this with `node bootstrap.cjs`. JavaScript tests can use an equivalent
+registration-only file with `node --test --require ./test/register.cjs`.
+TypeScript test files outside the application's source directory also need their
+test runner's TypeScript support, for example
+`node --test -r ts-node/register -r ./test/register.cjs test/*.test.ts`.
+Use relative imports from those tests into the application; the registered
+compiler handles `$modules` inside application source. The registration accepts an
+optional second argument naming a TypeScript configuration file and is scoped to
+the API's parent directory. Use an absolute API path. Run `boring check` separately
+for source type and architecture checks. Compiled applications need no registration.
+
 ## Adding a route
 
 The names `get.ts`, `post.ts`, `put.ts`, `patch.ts`, `delete.ts`, `head.ts`, and `options.ts` are reserved. A `get.ts` directly inside `api/` handles `GET /`. A folder named `[id]` becomes the `:id` URL parameter. Static routes take precedence over dynamic routes. Duplicate or unknown convention files cause startup to fail.
 
 ```ts
 // api/orders/[id]/get.ts
-import { order, orderParams } from "../../../modules/orders/schemas";
+import { order, orderParams } from "$modules/orders/schemas";
 import type { GetHandler } from "./$types";
 
 export const params = orderParams;
@@ -180,12 +272,12 @@ identity. Its authorization hook delegates to the shared access facade:
 
 ```ts
 // In api/+auth.ts, alongside authenticate().
-import type { Context } from "@boringapi/core";
-import { requireAccess } from "../modules/access/facade";
-import type { Actor, AuthorizationRule } from "../modules/access/schemas";
+import type { AuthorizationContext } from "./$types";
+import { requireAccess } from "$modules/access/facade";
+import type { AuthorizationRule } from "$modules/access/schemas";
 
-export function authorize(ctx: Context, rule: AuthorizationRule): void {
-    requireAccess(ctx.session as Actor, rule);
+export function authorize(ctx: AuthorizationContext, rule: AuthorizationRule): void {
+    requireAccess(ctx.session, rule);
 }
 ```
 
@@ -286,8 +378,8 @@ The setup hook supplies the storage implementation:
 ```ts
 // api/+setup.ts
 import { createMemoryStore } from "../infra/memoryStore";
-import { createOrders } from "../modules/orders/facade";
-import type { Order } from "../modules/orders/schemas";
+import { createOrders } from "$modules/orders/facade";
+import type { Order } from "$modules/orders/schemas";
 
 export function setup() {
     const orderStore = createMemoryStore<Order>();
@@ -349,6 +441,7 @@ Diagnostics have stable codes and source locations:
 | `BORING105` | Browser code or shared schemas import server code. |
 | `BORING106` | Unresolved dependency or unsupported module loader/path. |
 | `BORING107` | Dependency outside the application structure or misplaced module file. |
+| `BORING108` | Invalid `$modules` path or an editor alias mapping that differs from the application convention. |
 
 For endpoint violations, diagnostics also list callable operations inferred from
 `+setup` when available, such as `ctx.services.orders.get`, with their declaration
@@ -450,7 +543,7 @@ reported public entry points when more implementation detail is needed.
 
 ## Generated types
 
-`boring dev`, `boring check`, `boring inspect`, and `boring sync` generate a virtual `$types` module under `.boring/types` for every route directory. The generator does not evaluate application code or duplicate schemas. The generated types reference the exports of the corresponding method file:
+`boring dev`, `boring check`, `boring inspect`, `boring build`, and `boring sync` generate a virtual `$types` module under `.boring/types` for every directory containing routes or hooks, including hook-only directories. The generator does not evaluate application code or duplicate schemas. The generated route types reference the exports of the corresponding method file:
 
 - `params`, `query`, and `body` are typed according to their Zod output.
 - The return value of `GetHandler` or `PostHandler` must match the input of the `output` schema.
@@ -458,6 +551,55 @@ reported public entry points when more implementation detail is needed.
 - The return value of `authenticate()` becomes `ctx.session`. On protected routes, `session` is not optional.
 - The type of the second `authorize()` parameter limits the permitted values of the `authorization` export. `boring check` also enforces this contract for handlers without generated type annotations.
 - The return values of all inherited `+middleware.ts` files are merged into `ctx.locals`.
+
+Hooks also import their application-specific contexts from `./$types`. These
+types retain every member of the full request `Context`; there is still one
+context object shared throughout the request. Their names distinguish the type
+guarantees at each phase. Setup runs once per application and keeps its separate
+`SetupContext`:
+
+| Hook | Generated context | Available application data |
+| --- | --- | --- |
+| `+setup` | `SetupContext` | The setup logger and Map API. Returned services are inferred for subsequent requests. |
+| `authenticate` in `+auth` | `AuthenticationContext` | Inferred services; session is `undefined` and middleware locals are not available yet. |
+| `authorize` in `+auth` | `AuthorizationContext` | Inferred services, a required session, and completed middleware locals for routes declaring authorization. |
+| `+middleware` | `MiddlewareContext` | Inferred services, an optional session and only the preceding middleware's locals. |
+| `+envelope` | `EnvelopeContext` | Validated input, output payload, session and completed locals for routes using this envelope. Nearest overrides and `envelope = false` are respected. |
+| `+error`, `+error.<status>` | `ErrorContext` | Inferred services, optional session and partial locals, including values before middleware overwrites. Input remains `unknown` because the error may precede validation. |
+
+Authentication, authorization and middleware run before input validation, so their
+`params`, `query` and `body` remain `unknown`. Shared hooks receive unions when
+their applicable routes differ. An unused envelope receives a general request
+context until routes use it. Error contexts also cover failures before hooks run.
+Without an output schema, an envelope infers payloads from handler return types;
+if a handler can return `undefined`, the payload remains `unknown` because an
+earlier hook may have assigned it.
+
+Annotate a hook's context and let TypeScript infer its return value. The complete
+example in `examples/basic/api/+auth.ts` uses `AuthenticationContext` for credential
+verification and `AuthorizationContext` for permission checks. The returned
+session type flows into authorization and routes without a manual session cast.
+
+The corresponding `SetupHandler`, `AuthenticationHandler`,
+`AuthorizationHandler<Rule>`, `MiddlewareHandler`, `EnvelopeHandler` and
+`ErrorHandler` types are generated in the relevant hook directories too. Use
+`satisfies` when checking a function against a handler type while preserving its
+inferred return type:
+
+```ts
+// api/+middleware.ts
+import type { MiddlewareHandler } from "./$types";
+
+export const handler = ((ctx) => ({
+  requestId: ctx.request.header("x-request-id") ?? "request"
+})) satisfies MiddlewareHandler;
+```
+
+`Services`, `Session` and `Locals` are exported from each generated module for
+reuse. `Locals` describes the completed middleware chain at that directory;
+`MiddlewareContext` exposes only the preceding part of that chain. Avoid a broad
+handler annotation on setup, authentication or middleware when its return value
+must be inferred for other files.
 
 Generated files are not committed. There are two ways to make the editor resolve `./$types` in the same way as `boring check`. A simple project can extend the generated configuration from its `tsconfig.json`:
 
@@ -470,17 +612,23 @@ Generated files are not committed. There are two ways to make the editor resolve
 }
 ```
 
-If the application already extends another base configuration, add only `rootDirs` instead:
+If the application already extends another base configuration, add the equivalent
+settings instead. For an API at `api/` and modules at `modules/`:
 
 ```json
 {
   "compilerOptions": {
-    "rootDirs": [".", ".boring/types"]
+    "baseUrl": ".",
+    "rootDirs": [".", ".boring/types"],
+    "paths": { "$modules/*": ["modules/*"] }
   }
 }
 ```
 
-The configuration is created the first time you run `boring sync`, `boring dev`, `boring check`, or `boring inspect`. Both `check` and `inspect` set `rootDirs` themselves, so they also work without this editor setting.
+For `src/api`, use `src/modules/*`. Merge this entry with any other explicit
+`paths` entries. The generated configuration is refreshed by `sync`, `dev`,
+`check`, `inspect` and `build`. Checks set `rootDirs` themselves; `$modules`
+imports additionally require matching editor settings as described above.
 The API directory must be inside the project because its location is mapped to the generated `.boring/types` directory.
 
 ## Files prefixed with `+`
@@ -514,12 +662,18 @@ yarn install
 yarn example:dev     # run the local source against examples/basic/api
 yarn example:check   # check the local example
 yarn example:inspect # discover the example's routes and existing operations
-yarn example:sync    # generate only the local example's types
+yarn example:sync    # generate the local example's types and editor configuration
+yarn example:build   # compile the example and its local library into .boring/example-build
 yarn example:start   # start examples/basic/server.ts
 yarn typecheck
 yarn test
 yarn build           # compile only the library into dist
 ```
+
+The example keeps an explicit `$modules/*` entry in the repository's tsconfig
+because the repository also generates types for independent test applications.
+`tsconfig.example.json` selects its application build. Run the compiled example
+with `node .boring/example-build/examples/basic/server.js`.
 
 ## Publishing
 

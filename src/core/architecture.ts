@@ -210,7 +210,9 @@ export function checkArchitecture(program: ts.Program, apiDirectory: string, gen
             const endpoint = from.kind === "api" && /(?:^|[/\\])(get|post|put|patch|delete|head|options)\.[jt]s$/.test(file);
             const setup = file === join(directories.api, "+setup.ts") || file === join(directories.api, "+setup.js");
 
-            if (!edge.typeOnly && to.kind === "builtin" && to.name === "module") {
+            if (from.kind === "api" && to.kind === "generated" && edge.typeOnly) {
+                continue;
+            } else if (!edge.typeOnly && to.kind === "builtin" && to.name === "module") {
                 fail("BORING106", "Custom module loaders cannot be checked. Use explicit imports instead of node:module/createRequire.");
             } else if (to.kind === "api") {
                 fail("BORING104", "Routes and hooks are entry points, not dependencies. Move shared behavior into a module facade or schemas.");

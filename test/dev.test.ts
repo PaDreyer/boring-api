@@ -28,6 +28,12 @@ it("boring dev reloads sibling modules and infra, including newly created direct
     const api = join(application, "http");
     mkdirSync(api, { recursive: true });
     writeFileSync(join(root, "package.json"), '{"name":"dev-consumer","private":true}\n');
+    writeFileSync(join(root, "tsconfig.json"), JSON.stringify({ compilerOptions: {
+        module: "commonjs", target: "ES2020", allowJs: true,
+    }, include: ["app/**/*"] }));
+    // Dev must use the same project configuration as check/build, rather than
+    // accidentally selecting a different tsconfig beside the API directory.
+    writeFileSync(join(application, "tsconfig.json"), '{"compilerOptions":{"module":"esnext"}}');
     writeFileSync(join(api, "get.js"), 'exports.handler = () => ({ value: "initial" });\n');
 
     const child = spawn(process.execPath, [
@@ -77,7 +83,7 @@ it("boring dev reloads sibling modules and infra, including newly created direct
         // Connect the new facade, then change only its dependencies.
         await change(() => {
             writeFileSync(join(api, "+setup.js"),
-                'exports.setup = () => ({ orders: require("../modules/orders/facade") });\n');
+                'exports.setup = () => ({ orders: require("$modules/orders/facade") });\n');
             writeFileSync(join(api, "get.js"),
                 'exports.handler = ctx => ({ value: ctx.services.orders.read() });\n');
         }, "stored");

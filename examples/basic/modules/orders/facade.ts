@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { HttpError } from "../../../../src";
-import { requireAccess } from "../access/facade";
-import type { Actor } from "../access/schemas";
+import { requireAccess } from "$modules/access/facade";
+import type { Actor } from "$modules/access/schemas";
 import type { CreateOrder, Order } from "./schemas";
 
 export interface OrderStore {

@@ -4,7 +4,10 @@
     "module": "commonjs",
     "moduleResolution": "node",
     "baseUrl": ".",
-    "paths": { "@boringapi/core": ["src/index.ts"] },
+    "paths": {
+      "@boringapi/core": ["src/index.ts"],
+      "$modules/*": ["examples/basic/modules/*"]
+    },
     "rootDirs": [".", ".boring/types"],
     "rootDir": "src",
     "outDir": "dist",

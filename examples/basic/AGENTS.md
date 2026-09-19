@@ -14,7 +14,13 @@ repository's AGENTS.md also applies while editing this bundled example.
    facade already provides `create` and `get`; do not introduce a second orders
    service or access its storage from an endpoint.
 3. Reuse Zod schemas and infer types from them. Route files import method-specific
-   handlers from `./$types`; never edit generated files.
+   handlers from `./$types`. Hooks import their generated `SetupContext`,
+   `AuthenticationContext`, `AuthorizationContext`, `MiddlewareContext`,
+   `EnvelopeContext` or `ErrorContext` from `./$types` too; never edit generated
+   files. Annotate the context, or use `satisfies` with a generated handler type,
+   to preserve inferred service, session and locals return types. Import public schemas
+   with `$modules/<name>/schemas` and facades with `$modules/<name>/facade`
+   where the import boundaries permit them. Keep same-module imports relative.
 4. Read `modules/access/schemas.ts` for the permission catalog and
    `modules/access/facade.ts` for role grants and `requireAccess`. Declare the
    required permission in the endpoint's `authorization` export and check it
@@ -65,3 +71,11 @@ The token hook is a demonstration controlled by `BORING_API_TOKEN`. The memory
 store is non-persistent demonstration storage. Do not embed credentials or present
 either as a production integration. `boring init` and `boring add` are planned
 commands and are not available yet.
+
+`yarn example:build` compiles the example with `tsconfig.example.json` into
+`.boring/example-build`, including its relative imports of the local library.
+The compiled entry is `examples/basic/server.js` within that output directory.
+Standalone consumers use `boring build`; plain `tsc` does not rewrite `$modules`.
+For IDE support, extend `.boring/tsconfig.json` or preserve its alias mapping
+when using your own `paths`. Custom TypeScript servers/tests register the source
+compiler from `@boringapi/core/register` before importing application modules.

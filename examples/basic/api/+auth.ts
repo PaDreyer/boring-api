@@ -1,10 +1,10 @@
 import { timingSafeEqual } from "crypto";
-import { Context } from "../../../src";
-import { permissionsForRoles, requireAccess } from "../modules/access/facade";
-import type { AuthorizationRule } from "../modules/access/schemas";
+import type { AuthenticationContext, AuthorizationContext } from "./$types";
+import { permissionsForRoles, requireAccess } from "$modules/access/facade";
+import type { AuthorizationRule } from "$modules/access/schemas";
 
 /** Example only: replace this file with the application's identity provider. */
-export function authenticate(ctx: Context) {
+export function authenticate(ctx: AuthenticationContext) {
     const expected = process.env.BORING_API_TOKEN;
     const header = ctx.request.header("authorization");
     if (!expected || !header?.startsWith("Bearer ")) return;
@@ -17,8 +17,6 @@ export function authenticate(ctx: Context) {
     }
 }
 
-export function authorize(ctx: Context, rule: AuthorizationRule): void {
-    // The pipeline requires a session before calling authorize().
-    const session = ctx.session as NonNullable<ReturnType<typeof authenticate>>;
-    requireAccess(session, rule);
+export function authorize(ctx: AuthorizationContext, rule: AuthorizationRule): void {
+    requireAccess(ctx.session, rule);
 }

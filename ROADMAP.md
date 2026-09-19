@@ -150,6 +150,64 @@ union services expose their available methods; private/protected methods stay
 out of the operation catalog and repair hints; generic constraints/defaults are
 instantiated while preserving dependencies between method type parameters.
 
+## Module shortcuts and consumer builds (after step 3, before step 4)
+
+Status: complete (2026-09-19).
+
+- Add `$modules/<name>/schemas` and `$modules/<name>/facade`, resolved from the
+  explicitly selected API directory's sibling `modules` tree.
+- Generate the TypeScript `paths`, `baseUrl` and `rootDirs` configuration for
+  ordinary IDE completion, hover, definitions, rename and auto-imports. Diagnose
+  conflicting consumer mappings with `BORING108`; no language server is needed.
+- Reuse TypeScript resolution in static checks/inspection and the import
+  transformer. Module boundaries remain mandatory, including aliased access.
+- Add `boring build` for consumer CommonJS output with rewritten imports,
+  declarations and source maps. Validate before replacing owned output and
+  remove stale routes on a successful rebuild.
+- Share the transformation with `boring dev` and expose
+  `@boringapi/core/register` for custom source servers and test runners.
+- Update the example and documentation; preserve short same-module imports.
+
+Acceptance: language-service tests exercise the actual generated configuration;
+source execution, multiple applications and compiled HTTP requests use the same
+shortcut. Declaration output resolves without source, failed builds preserve
+existing output, and the repository checks pass.
+
+Delivered: shared import transformation, generated IDE configuration, the
+consumer build command, the public source-compiler registration and an updated
+example. The TypeScript 4.9 language-service tests cover path/member completion,
+hover, definitions, rename and shortcut auto-imports. Source and build tests
+cover re-exports, import types, import-equals, dynamic imports and literal
+CommonJS calls, including shadowed loader names and independent applications.
+
+Validation: `yarn example:check`, `yarn typecheck`, `yarn test` (66 passing tests),
+`yarn build` and `yarn example:build` passed. A packed-package consumer exercised
+the executable CLI, sync, check, inspect, source registration, dev and build, then
+started the production API after removing its original source directory. A
+regression test also confirms that dev chooses the same project configuration
+as check/build when another tsconfig is nested beside the API. Step 4 remains planned.
+
+The follow-up audit identified four edge cases, now fixed with regression tests:
+source execution loads JavaScript companions of declaration files; default-output
+rebuilds exclude previous output from the source search; nested import types are
+rewritten in emitted and copied declarations; emitted paths follow the configured
+JSX mode. `yarn example:check`, `yarn typecheck`, `yarn test` (70 passing tests) and
+`yarn build` all passed after these corrections.
+
+Application-specific `./$types` now cover setup, authentication, authorization,
+middleware, envelopes and error hooks, including directories without routes.
+Request hooks retain the complete Context API with inferred services, sessions
+and locals appropriate to their execution phase. Envelopes infer validated input
+and payloads from their effective routes; errors account for incomplete
+authentication, validation and middleware. The example imports these generated
+types throughout and no longer casts its session for authorization.
+
+Validation: `yarn example:check`, `yarn typecheck`, `yarn test` (76 passing tests)
+and both `yarn build` and `yarn example:build` passed. New tests check ordinary TypeScript IntelliSense and
+definition navigation, return-type changes, hook-only directories, partial and
+overwritten locals, effective envelopes, and hook declarations in source-free
+consumer builds.
+
 ## 4. Generate the established patterns
 
 Status: planned. These generator commands do not exist yet.
@@ -157,6 +215,8 @@ Status: planned. These generator commands do not exist yet.
 - Add `boring init`, `boring add module <name>` and
   `boring add endpoint <path/method>`.
 - Generate the established structure, consumer instructions and check scripts.
+- Use the generated `./$types` in route and hook templates.
+- Include the `$modules` editor configuration and `boring build` scripts.
 - Inspect existing modules before creating new code; reuse an existing module
   and its schemas rather than generating competing services or copied types.
 - Never overwrite existing work silently. Keep output small and directly editable.

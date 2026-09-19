@@ -1,5 +1,5 @@
-import { Context } from "../../../src";
+import type { EnvelopeContext } from "./$types";
 
-export function handler(ctx: Context) {
+export function handler(ctx: EnvelopeContext) {
     return { data: ctx.payload };
 }

@@ -1,3 +1,5 @@
-export function handler() {
+import type { ErrorHandler } from "./$types";
+
+export const handler: ErrorHandler = () => {
     return { error: { message: "Route not found" } };
-}
+};

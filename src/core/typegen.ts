@@ -1,7 +1,8 @@
 import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync, statSync, writeFileSync } from "fs";
-import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "path";
 
 import { ApiSources, ContractSource, RouteSource, scanApi } from "./conventions";
+import { inside, modulePaths } from "./compiler";
 
 export interface TypegenResult {
     apiDirectory: string;
@@ -21,73 +22,122 @@ function typeName(method: string): string {
     return `${method[0].toUpperCase()}${method.slice(1)}`;
 }
 
-function generatedFile(
-    outputFile: string,
-    routes: RouteSource[],
-    setup: string | undefined,
-    auth: string | undefined,
-): string {
-    const lines: string[] = [
+function generatedFile(outputFile: string, directory: string, routes: RouteSource[], tree: ApiSources): string {
+    const imports: string[] = [];
+    const modules = new Map<string, string>();
+    const moduleType = (file: string): string => {
+        let name = modules.get(file);
+        if (!name) {
+            name = `Module${modules.size}`;
+            modules.set(file, name);
+            imports.push(`type ${name} = typeof import(${JSON.stringify(moduleSpecifier(outputFile, file))});`);
+        }
+        return name;
+    };
+    const locals = (middleware: string[]): string => middleware.reduce(
+        (previous, file) => `Merge<${previous}, ObjectReturn<${moduleType(file)}["handler"]>>`, "{}",
+    );
+    const stages = (middleware: string[]): string[] => middleware.map((_, index) => locals(middleware.slice(0, index + 1)));
+    const union = (types: string[], fallback: string): string => [...new Set(types)].join(" | ") || fallback;
+    const routeContext = (route: RouteSource): string => `RouteContext<${moduleType(route.file)}, ${locals(route.scope.middleware)}>`;
+    const own = tree.contracts.filter(contract => dirname(contract.file) === directory);
+    const hooks = new Map(own.map(contract => [basename(contract.file, extname(contract.file)), contract.file]));
+    const middleware = tree.contracts.filter(contract => /^\+middleware\.[jt]s$/.test(basename(contract.file)) && inside(dirname(contract.file), directory))
+        .map(contract => contract.file).sort((a, b) => dirname(a).split(sep).length - dirname(b).split(sep).length);
+    const setup = tree.setup ? moduleType(tree.setup) : undefined;
+    const auth = tree.auth ? moduleType(tree.auth) : undefined;
+    const definitions: string[] = [
+        setup ? `export type Services = ObjectReturn<${setup}["setup"]>;` : "export type Services = {};",
+        auth ? `type RawSession = ${auth} extends { authenticate: infer F } ? AwaitedReturn<F> : never;` : "type RawSession = never;",
+        "export type Session = [NonNullable<RawSession>] extends [never] ? unknown : NonNullable<RawSession>;",
+        auth ? `type AuthorizationRule = ${auth} extends { authorize: (context: any, rule: infer R, ...args: any[]) => any } ? R : never;` : "type AuthorizationRule = never;",
+        `export type Locals = ${locals(middleware)};`,
+        "",
+    ];
+    const exports: string[] = [];
+    if (hooks.has("+setup")) exports.push(
+        "export type SetupContext = BoringSetupContext;",
+        "export type SetupHandler = (context: SetupContext) => MaybePromise<unknown>;",
+    );
+    if (hooks.has("+auth")) {
+        const authorizationLocals = union(tree.routes.map(route =>
+            `(${moduleType(route.file)} extends { authorization: unknown } ? ${locals(route.scope.middleware)} : never)`), "{}");
+        exports.push(
+            "export type AuthenticationContext = RequestContext<undefined, {}>;",
+            "export type AuthenticationHandler = (context: AuthenticationContext) => MaybePromise<unknown>;",
+            `type AuthorizationLocals = ${authorizationLocals};`,
+            "export type AuthorizationContext = RequestContext<Session, [AuthorizationLocals] extends [never] ? {} : AuthorizationLocals>;",
+            "export type AuthorizationHandler<Rule> = (context: AuthorizationContext, rule: Rule) => MaybePromise<void>;",
+        );
+    }
+    const ownMiddleware = hooks.get("+middleware");
+    if (ownMiddleware) exports.push(
+        // A middleware must not depend on its own inferred return type.
+        `export type MiddlewareContext = RequestContext<Session | undefined, ${locals(middleware.filter(file => file !== ownMiddleware))}>;`,
+        "export type MiddlewareHandler = (context: MiddlewareContext) => MaybePromise<unknown>;",
+    );
+    const envelope = hooks.get("+envelope");
+    if (envelope) {
+        const contexts = tree.routes.filter(route => route.scope.envelope === envelope).map(route =>
+            `(${moduleType(route.file)} extends { envelope: false } ? never : WithPayload<${routeContext(route)}, SchemaOutput<${moduleType(route.file)}, "output", HandlerOutput<${moduleType(route.file)}>>>)`);
+        exports.push(
+            `type EnvelopeRoutes = ${union(contexts, "never")};`,
+            "export type EnvelopeContext = [EnvelopeRoutes] extends [never] ? RequestContext<Session | undefined, Locals> : EnvelopeRoutes;",
+            "export type EnvelopeHandler = (context: EnvelopeContext) => MaybePromise<unknown>;",
+        );
+    }
+    const errorHooks = [...hooks].filter(([name]) => /^\+error(?:\.[45]\d\d)?$/.test(name));
+    if (errorHooks.length) {
+        const contexts = tree.routes.filter(route => route.scope.errors.some(layer =>
+            errorHooks.some(([, file]) => layer.generic === file || [...layer.statuses.values()].includes(file))));
+        // Errors can occur before authentication or in any middleware. Preserve
+        // earlier overwritten locals and make every local optional.
+        exports.push(
+            `export type ErrorContext = RequestContext<Session | undefined, PartialLocals<${union(contexts.flatMap(route => stages(route.scope.middleware)), "{}")}>>;`,
+            "export type ErrorHandler = (context: ErrorContext, error: Error) => MaybePromise<unknown>;",
+        );
+    }
+    for (const route of routes.sort((left, right) => left.method.localeCompare(right.method))) {
+        const prefix = typeName(route.method);
+        const routeModule = moduleType(route.file);
+        exports.push(
+            `export type ${prefix}Context = ${routeContext(route)};`,
+            `export type ${prefix}Output = SchemaOutput<${routeModule}, "output", unknown>;`,
+            `export type ${prefix}Handler = AuthorizationIsValid<${routeModule}> extends true ? (context: ${prefix}Context) => MaybePromise<SchemaInput<${routeModule}, "output", unknown>> : never;`,
+        );
+    }
+    return [
         "// Generated by Boring API. Do not edit.",
-        'import type { Context as BoringContext } from "@boringapi/core";',
+        'import type { Context as BoringContext, SetupContext as BoringSetupContext } from "@boringapi/core";',
         'import type { z } from "zod";',
         "",
         "type AwaitedReturn<F> = F extends (...args: any[]) => infer R ? Awaited<R> : never;",
-        "type ObjectPart<T> = Extract<T, Record<string, unknown>>;",
-        "type ObjectReturn<F> = [ObjectPart<AwaitedReturn<F>>] extends [never] ? {} : ObjectPart<AwaitedReturn<F>>;",
+        "type ObjectPart<T> = T extends Record<string, unknown> ? T : {};",
+        "type ObjectReturn<F> = [AwaitedReturn<F>] extends [never] ? {} : ObjectPart<AwaitedReturn<F>>;",
         "type SchemaOutput<M, K extends PropertyKey, F> = M extends Record<K, infer S> ? S extends z.ZodTypeAny ? z.output<S> : F : F;",
         "type SchemaInput<M, K extends PropertyKey, F> = M extends Record<K, infer S> ? S extends z.ZodTypeAny ? z.input<S> : F : F;",
         "type Simplify<T> = { [K in keyof T]: T[K] } & {};",
         "type Merge<A, B> = A extends unknown ? B extends unknown ? Simplify<Omit<A, keyof B> & B> : never : never;",
         "type MaybePromise<T> = T | Promise<T>;",
+        "type UnionKeys<T> = T extends unknown ? keyof T : never;",
+        "type PartialLocals<T> = { [K in UnionKeys<T>]?: T extends unknown ? K extends keyof T ? T[K] : never : never };",
+        "type HandlerOutput<M> = M extends { handler: infer F } ? undefined extends AwaitedReturn<F> ? unknown : AwaitedReturn<F> : unknown;",
+        'type WithPayload<C, P> = C extends unknown ? Omit<C, "payload"> & { get payload(): P; set payload(value: unknown); } : never;',
         "",
-    ];
-
-    if (setup) {
-        lines.push(`type SetupModule = typeof import(${JSON.stringify(moduleSpecifier(outputFile, setup))});`);
-        lines.push('type Services = ObjectReturn<SetupModule["setup"]>;');
-    } else {
-        lines.push("type Services = {};");
-    }
-    if (auth) {
-        lines.push(`type AuthModule = typeof import(${JSON.stringify(moduleSpecifier(outputFile, auth))});`);
-        lines.push('type RawSession = AuthModule extends { authenticate: infer F } ? AwaitedReturn<F> : never;');
-        lines.push("type Session = [NonNullable<RawSession>] extends [never] ? unknown : NonNullable<RawSession>;");
-        lines.push('type AuthorizationRule = AuthModule extends { authorize: (context: any, rule: infer R, ...args: any[]) => any } ? R : never;');
-    } else {
-        lines.push("type Session = unknown;");
-        lines.push("type AuthorizationRule = never;");
-    }
-    lines.push("");
-
-    const middleware = routes[0]?.scope.middleware ?? [];
-    middleware.forEach((file, index) => {
-        lines.push(`type Middleware${index} = typeof import(${JSON.stringify(moduleSpecifier(outputFile, file))});`);
-        lines.push(`type MiddlewareLocals${index} = ObjectReturn<Middleware${index}["handler"]>;`);
-    });
-    const locals = middleware.reduce((merged, _, index) => `Merge<${merged}, MiddlewareLocals${index}>`, "{}");
-    lines.push(`type Locals = ${locals};`);
-    lines.push("");
-    lines.push("type RouteContext<M> = Omit<BoringContext, \"params\" | \"query\" | \"body\" | \"session\" | \"services\" | \"locals\"> & {");
-    lines.push('    readonly params: SchemaOutput<M, "params", BoringContext["params"]>;');
-    lines.push('    readonly query: SchemaOutput<M, "query", BoringContext["query"]>;');
-    lines.push('    readonly body: SchemaOutput<M, "body", BoringContext["body"]>;');
-    lines.push("    readonly session: M extends { authentication: true } | { authorization: unknown } ? Session : Session | undefined;");
-    lines.push("    readonly services: Readonly<Services>;");
-    lines.push("    readonly locals: Locals;");
-    lines.push("};");
-    lines.push("type AuthorizationIsValid<M> = M extends { authorization: infer R } ? R extends AuthorizationRule ? true : false : true;");
-    lines.push("");
-
-    for (const route of routes.sort((left, right) => left.method.localeCompare(right.method))) {
-        const prefix = typeName(route.method);
-        lines.push(`type ${prefix}Module = typeof import(${JSON.stringify(moduleSpecifier(outputFile, route.file))});`);
-        lines.push(`export type ${prefix}Context = RouteContext<${prefix}Module>;`);
-        lines.push(`export type ${prefix}Output = SchemaOutput<${prefix}Module, "output", unknown>;`);
-        lines.push(`export type ${prefix}Handler = AuthorizationIsValid<${prefix}Module> extends true ? (context: ${prefix}Context) => MaybePromise<SchemaInput<${prefix}Module, "output", unknown>> : never;`);
-        lines.push("");
-    }
-    return `${lines.join("\n")}\n`;
+        ...imports, "", ...definitions,
+        'type RequestContext<S, L> = Omit<BoringContext, "session" | "services" | "locals"> & {',
+        "    readonly session: S;",
+        "    readonly services: Readonly<Services>;",
+        "    readonly locals: L;",
+        "};",
+        'type RouteContext<M, L> = Omit<RequestContext<M extends { authentication: true } | { authorization: unknown } ? Session : Session | undefined, L>, "params" | "query" | "body"> & {',
+        '    readonly params: SchemaOutput<M, "params", BoringContext["params"]>;',
+        '    readonly query: SchemaOutput<M, "query", BoringContext["query"]>;',
+        '    readonly body: SchemaOutput<M, "body", BoringContext["body"]>;',
+        "};",
+        "type AuthorizationIsValid<M> = M extends { authorization: infer R } ? R extends AuthorizationRule ? true : false : true;",
+        "", ...exports, "",
+    ].join("\n");
 }
 
 function generatedContracts(outputFile: string, contracts: ContractSource[], auth: string | undefined): string {
@@ -154,7 +204,7 @@ function rejectSymbolicLinkPath(parent: string, child: string): void {
     }
 }
 
-/** Generates Svelte-style virtual $types modules for every route folder. */
+/** Generates virtual $types modules for every route and hook folder. */
 export function generateTypes(projectRoot: string, apiDirectory: string): TypegenResult {
     const root = realpathSync(resolve(projectRoot));
     const requestedApi = resolve(root, apiDirectory);
@@ -177,10 +227,15 @@ export function generateTypes(projectRoot: string, apiDirectory: string): Typege
         routesByDirectory.set(route.directory, current);
     }
 
+    for (const contract of tree.contracts) {
+        const directory = dirname(contract.file);
+        if (!routesByDirectory.has(directory)) routesByDirectory.set(directory, []);
+    }
+
     for (const [directory, routes] of routesByDirectory) {
         const output = join(generatedApiRoot, relative(api, directory), "$types.d.ts");
         mkdirSync(dirname(output), { recursive: true });
-        writeFileSync(output, generatedFile(output, routes, tree.setup, tree.auth));
+        writeFileSync(output, generatedFile(output, directory, routes, tree));
         files.push(output);
     }
 
@@ -194,8 +249,11 @@ export function generateTypes(projectRoot: string, apiDirectory: string): Typege
     }
 
     mkdirSync(join(root, ".boring"), { recursive: true });
+    rejectSymbolicLinkPath(root, join(root, ".boring", "tsconfig.json"));
     writeFileSync(join(root, ".boring", "tsconfig.json"), `${JSON.stringify({
-        compilerOptions: { rootDirs: ["..", "./types"] },
+        // TS 4.9 resolves paths without baseUrl, but its import-path completions
+        // still require it. Keep generated targets relative to the project root.
+        compilerOptions: { baseUrl: "..", rootDirs: ["..", "./types"], paths: modulePaths(api, root) },
     }, null, 2)}\n`);
 
     return { apiDirectory: api, generatedRoot, files, sources: tree };

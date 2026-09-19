@@ -1,5 +1,7 @@
 node_modules
 /tmp
+dist
+.boring
 
 .env.local
 .env

@@ -1,276 +1,151 @@
-import {readdirSync} from "fs";
-import {basename, extname, join, normalize} from 'path';
-import express, {NextFunction, Request, Response} from 'express';
-import {SetupContext} from "./setupContext";
-import {
-    createExpressErrorHandler,
-    createExpressHandler,
-    filterErrorHandlerNodes,
-    getFilesOfType,
-    getLogger
-} from './utils';
-import {ApiFile, ApiFileType, FileNode} from "./node";
-import {Context} from "./context";
+import express, { Express, NextFunction, Request, Response } from "express";
+import { Server } from "http";
+import { ZodTypeAny } from "zod";
+import { Context } from "./context";
+import { discover } from "./discovery";
+import { asHttpError, HttpError } from "./errors";
+import { SetupContext } from "./setupContext";
+import { AuthModule, ErrorModule, Route, RouteScope } from "./types";
 
-
-export class BoringApi {
-    async scan(path: string) {
-        const app = express();
-
-        const tree = this.scanTree(path);
-
-        const setupHandlers = getFilesOfType(tree, ApiFileType.setup)
-
-        const setup = new SetupContext();
-        for (const setupHandler of setupHandlers) {
-            await setupHandler.file.meta.setup(setup);
-        }
-
-        setup.mergeWithDefault();
-
-
-        app.use((req, res, next) => {
-            const ctx =  new Context(req, res);
-            ctx.set("setup", setup);
-            ctx.set("headers", req.headers);
-            ctx.set("query", req.query);
-            ctx.set("params", req.params);
-            req.app.locals.ctx = ctx;
-            return next();
-        })
-
-
-        const authenticationMiddleware = getFilesOfType(tree, ApiFileType.base)
-            .find( node => node.file.name === "authentication");
-
-        if (authenticationMiddleware) {
-            app.use(async (req, res, next) => {
-                try {
-                    await authenticationMiddleware.file.meta.handler(req.app.locals.ctx);
-                } catch(e) {
-                    return next(e);
-                }
-
-                return next();
-            })
-        }
-
-        const authorizationHandler= getFilesOfType(tree, ApiFileType.base)
-            .find( node => node.file.name === "authorization");
-
-        const envelopeHandler = getFilesOfType(tree, ApiFileType.base)
-            .find( node => node.file.name === "envelope");
-
-        const handlers = getFilesOfType(tree, ApiFileType.handler);
-        handlers.forEach( handler => {
-            let path = this.getNodePath(handler);
-            // @ts-ignore
-            app[handler.file.name](path, (req: Request, res: Response, next: NextFunction) => {
-                const ctx = req.app.locals.ctx;
-
-                const setup = ctx.get("setup");
-                const logger = getLogger(setup);
-                const startTime = performance.now();
-                res.on("finish", () => {
-                    logger.http(req.method, req.path, res.statusCode, performance.now() - startTime);
-                })
-
-                if (!ctx.has("session") && (handler.file.meta.authentication === true || handler.file.meta.authorization !== undefined)) {
-                    res.status(401);
-                    return next(new Error("401"))
-                }
-
-                if (handler.file.meta.authorization !== undefined && authorizationHandler) {
-                    try {
-                        authorizationHandler.file.meta.handler(ctx, handler.file.meta.authorization);
-                    } catch(e) {
-                        res.status(403)
-                        return next(e);
-                    }
-                }
-
-                if (handler.file.meta.body !== undefined) {
-                    try {
-                        handler.file.meta.body.parse(ctx.get("body"))
-                    } catch(e) {
-                        res.status(400);
-                        return next(e);
-                    }
-                }
-
-
-                handler.file.meta.handler(ctx).catch((e: any) => next(e));
-
-                if (handler.file.meta.envelope == true) {
-                    envelopeHandler?.file.meta.handler(ctx).catch((e: any) => next(e));
-                }
-
-                ctx.send(ctx.payload)
-            });
-        });
-
-
-
-        const errors = filterErrorHandlerNodes(tree);
-        const notFoundNode = errors.find(node => node.file.name === "404");
-        if (notFoundNode) {
-            app.use(createExpressHandler(setup, notFoundNode.file.meta.handler));
-        }
-
-        const errorNode = errors.find(node => node.file.name === "500");
-        if (errorNode) {
-            app.use(createExpressErrorHandler(setup, errorNode.file.meta.handler))
-        }
-
-        const logger = getLogger(setup);
-        logger.info("Start listening on port " + 4040);
-
-        app.listen(4040);
-    }
-
-    private scanTree(dir: string, parent?: FileNode, depth?: number): FileNode[] {
-        const tree: FileNode[] = [];
-        const files = readdirSync(dir, { withFileTypes: true });
-
-        for (const file of files) {
-            let node: FileNode;
-
-            if (file.isDirectory()) {
-                node = {
-                    parent,
-                    nodes: [],
-                    file: {
-                        type: ApiFileType.folder,
-                        name: basename(file.name, ".ts"),
-                        extension: extname(file.name),
-                        path: `${dir}/${file.name}`,
-                    },
-                    depth: depth ?? 0,
-                };
-                node.nodes = this.scanTree(`${dir}/${file.name}`, node, 1 + (depth ?? 0));
-            } else {
-                node = {
-                    parent,
-                    nodes: [],
-                    file: this.getFileData(`${dir}/${file.name}`, basename(file.name, ".ts"), extname(file.name), parent),
-                    depth: depth ?? 0,
-                };
-            }
-            tree.push(node);
-        }
-
-        return tree;
-    }
-
-    private getFileData(file: string, name: string, extension: string, parent?: FileNode): ApiFile {
-        if (parent && parent.file.name === "_setup") {
-            return {
-                type: ApiFileType.setup,
-                path: file,
-                name,
-                extension,
-                meta: {
-                    ...require(file),
-                }
-            }
-        }
-
-        if (parent && parent.file.name === '_base') {
-            const data = require(file)
-            return {
-                type: ApiFileType.base,
-                path: file,
-                name,
-                extension,
-                meta: {
-                    ...data,
-                }
-            }
-        }
-
-        if([
-            "get", "post", "delete", "patch", "options", "head"
-        ].includes(name)) {
-            const data = require(file)
-            return {
-                type: ApiFileType.handler,
-                path: file,
-                name,
-                extension,
-                meta: {
-                    ...data,
-                }
-            }
-        }
-
-        if(name === "not_found") {
-            const data = require(file);
-            return {
-                type: ApiFileType.notfound,
-                path: file,
-                name,
-                extension,
-                meta: {
-                    ...data,
-                }
-            }
-        }
-
-
-        // TODO: remove
-        if(/^\[[a-zA-Z]+\\]$/.test(name)) {
-            const data = require(file)
-            return {
-                type: ApiFileType.handler,
-                path: file,
-                name,
-                extension,
-                meta: {
-                    ...data,
-                }
-            }
-        }
-
-
-
-        switch(basename(file, ".ts")) {
-            case "get":
-            case "post":
-            case "delete":
-            case "patch":
-            case "options":
-            case "head":
-
-            default:
-                console.info(`Unsupported file type '${basename(file)}'`);
-                return {
-                    path: file,
-                    name,
-                    extension,
-                    type: ApiFileType.unknown,
-                }
-        }
-    }
-
-    private getNodePath(node: FileNode) {
-        let paths: string[] = [];
-        let currentNode: FileNode | undefined = node;
-
-        do {
-            if (currentNode) {
-                paths.push(currentNode.file.name);
-                currentNode = currentNode.parent;
-            }
-        } while (currentNode?.file.name);
-
-        paths = paths.reverse();
-        paths.pop();
-        return `/${paths.join("/")}`;
+function parseInput(schema: ZodTypeAny | undefined, value: unknown, field: string): unknown {
+    if (!schema) return value;
+    try {
+        return schema.parse(value);
+    } catch (error) {
+        const details = error && typeof error === "object" && "issues" in error
+            ? (error as { issues: unknown }).issues : undefined;
+        throw new HttpError(400, `Invalid ${field}`, details);
     }
 }
 
+function findErrorTemplate(scope: RouteScope, status: number): ErrorModule | undefined {
+    for (let i = scope.errors.length - 1; i >= 0; i--) {
+        const layer = scope.errors[i];
+        const template = layer.statuses.get(status) ??
+            (status >= 500 ? layer.statuses.get(500) : undefined) ?? layer.generic;
+        if (template) return template;
+    }
+    return undefined;
+}
 
+function registerRoute(app: Express, route: Route, auth: AuthModule | undefined, setup: SetupContext) {
+    const { module: mod } = route;
+    const run = async (req: Request, res: Response, next: NextFunction) => {
+        const ctx = new Context(req, res, setup);
+        res.locals.boringContext = ctx;
+        res.locals.boringScope = route.scope;
+        try {
+            if (auth?.authenticate) {
+                const session = await auth.authenticate(ctx);
+                if (session !== undefined) ctx.set("session", session);
+            }
+            for (const middleware of route.scope.middleware) {
+                ctx.assignLocals(await middleware.handler(ctx));
+                if (res.headersSent) return;
+            }
 
+            if ((mod.authentication === true || mod.authorization !== undefined) &&
+                (ctx.session === undefined || ctx.session === null)) {
+                throw new HttpError(401, "Unauthorized");
+            }
+            if (mod.authorization !== undefined) {
+                if (!auth?.authorize) throw new HttpError(403, "Forbidden");
+                await auth.authorize(ctx, mod.authorization);
+            }
 
-const test = new BoringApi();
-test.scan(normalize(join(process.cwd(), "src", "endpoints")));
+            ctx.set("params", parseInput(mod.params, req.params, "params"));
+            ctx.set("query", parseInput(mod.query, req.query, "query"));
+            ctx.set("body", parseInput(mod.body, req.body, "body"));
+
+            const returned = await mod.handler(ctx);
+            if (res.headersSent) return;
+            if (returned !== undefined) ctx.payload = returned;
+
+            if (!ctx.has("response_payload") && !mod.output) {
+                res.status(204).end();
+                return;
+            }
+
+            if (mod.output) ctx.payload = mod.output.parse(ctx.payload);
+            if (route.scope.envelope && mod.envelope !== false) {
+                const wrapped = await route.scope.envelope.handler(ctx);
+                if (wrapped !== undefined) ctx.payload = wrapped;
+            }
+            if (!res.headersSent) res.send(ctx.payload);
+        } catch (error) {
+            next(error);
+        }
+    };
+    (app as unknown as Record<string, (path: string, handler: typeof run) => void>)[route.method](route.path, run);
+}
+
+export class BoringApi {
+    async createApp(apiDirectory: string): Promise<Express> {
+        const { routes, setup: setupModule, auth, rootScope } = discover(apiDirectory);
+        const setup = new SetupContext();
+        if (setupModule) setup.assign(await setupModule.setup(setup));
+
+        const app = express();
+        app.disable("x-powered-by");
+        app.use((req, res, next) => {
+            const start = performance.now();
+            res.once("finish", () => setup.logger.http(req.method, req.path, res.statusCode, performance.now() - start));
+            next();
+        });
+        app.use(express.json());
+
+        for (const route of routes) registerRoute(app, route, auth, setup);
+
+        app.use((_req, _res, next) => next(new HttpError(404, "Not Found")));
+        app.use(async (error: unknown, req: Request, res: Response, _next: NextFunction) => {
+            if (res.headersSent) return _next(error);
+            const httpError = asHttpError(error);
+            if (httpError.status >= 500) setup.logger.error(error);
+            res.status(httpError.status);
+
+            const scope = (res.locals.boringScope as RouteScope | undefined) ?? rootScope;
+            const hook = findErrorTemplate(scope, httpError.status);
+            if (hook) {
+                const ctx = (res.locals.boringContext as Context | undefined) ?? new Context(req, res, setup);
+                const cause = error instanceof Error ? error : new Error(String(error));
+                ctx.delete("response_payload");
+                ctx.set("error", cause);
+                try {
+                    const returned = await hook.handler(ctx, cause);
+                    if (res.headersSent) return;
+                    if (returned !== undefined) ctx.payload = returned;
+                    if (ctx.has("response_payload")) {
+                        res.send(ctx.payload);
+                        return;
+                    }
+                } catch (hookError) {
+                    setup.logger.error(hookError);
+                    res.status(500);
+                }
+            }
+
+            const status = res.statusCode;
+            res.json({ error: { message: status >= 500 ? "Internal Server Error" : httpError.message,
+                ...(status < 500 && httpError.details !== undefined ? { details: httpError.details } : {}) } });
+        });
+        return app;
+    }
+
+    /** Starts the API and returns the HTTP server for clean shutdown. */
+    async listen(apiDirectory: string, port = 4040): Promise<Server> {
+        const app = await this.createApp(apiDirectory);
+        return new Promise<Server>((resolve, reject) => {
+            const server = app.listen(port, () => {
+                const address = server.address();
+                console.info(`Listening on port ${typeof address === "object" && address ? address.port : port}`);
+                resolve(server);
+            });
+            server.once("error", reject);
+        });
+    }
+
+    /** Legacy alias retained for existing callers. */
+    scan(apiDirectory: string, port = 4040): Promise<Server> {
+        return this.listen(apiDirectory, port);
+    }
+}

@@ -1,6 +1,6 @@
 {
   "name": "@boringapi/analyzer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Static project analysis, architecture checks and inspection for Boring API",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -1,6 +1,6 @@
 {
   "name": "@boringapi/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Convention-driven, file-based APIs for Node.js and TypeScript",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

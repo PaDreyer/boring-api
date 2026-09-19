@@ -1,6 +1,6 @@
 {
   "name": "@boringapi/compiler",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript configuration, alias resolution and source compilation for Boring API",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

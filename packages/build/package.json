@@ -1,6 +1,6 @@
 {
   "name": "@boringapi/build",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Portable application builds and compiled startup for Boring API",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

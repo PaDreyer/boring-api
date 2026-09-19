@@ -166,7 +166,8 @@ Status: complete (2026-09-19).
   declarations and source maps. Validate before replacing owned output and
   remove stale routes on a successful rebuild.
 - Share the transformation with `boring dev` and expose
-  `@boringapi/core/register` for custom source servers and test runners.
+  `@boringapi/compiler/register` for custom source servers and test runners (moved
+  from Core when development tools became a separate workspace package).
 - Update the example and documentation; preserve short same-module imports.
 
 Acceptance: language-service tests exercise the actual generated configuration;

@@ -20,6 +20,12 @@ importers:
         specifier: ^3.20.2
         version: 3.20.2
     devDependencies:
+      '@boringapi/cli':
+        specifier: workspace:^
+        version: link:../../packages/cli
+      '@boringapi/compiler':
+        specifier: workspace:^
+        version: link:../../packages/compiler
       '@types/node':
         specifier: ^18.11.17
         version: 18.11.17
@@ -51,6 +57,12 @@ importers:
         specifier: ^3.20.2
         version: 3.20.2
     devDependencies:
+      '@boringapi/cli':
+        specifier: workspace:^
+        version: link:../../packages/cli
+      '@boringapi/compiler':
+        specifier: workspace:^
+        version: link:../../packages/compiler
       '@types/express':
         specifier: ^4.17.15
         version: 4.17.15
@@ -76,6 +88,108 @@ importers:
         specifier: ^8.3.0
         version: 8.3.0(@types/node@18.11.17)
 
+  packages/analyzer:
+    dependencies:
+      '@boringapi/compiler':
+        specifier: workspace:^
+        version: link:../compiler
+      '@boringapi/core':
+        specifier: workspace:^
+        version: link:../core
+      '@boringapi/typegen':
+        specifier: workspace:^
+        version: link:../typegen
+      '@types/node':
+        specifier: ^18.11.17
+        version: 18.11.17
+      typescript:
+        specifier: ^4.9.4
+        version: 4.9.4
+    devDependencies:
+      ts-node:
+        specifier: ^10.9.1
+        version: 10.9.1(@types/node@18.11.17)(typescript@4.9.4)
+      zod:
+        specifier: ^3.20.2
+        version: 3.20.2
+
+  packages/build:
+    dependencies:
+      '@boringapi/analyzer':
+        specifier: workspace:^
+        version: link:../analyzer
+      '@boringapi/compiler':
+        specifier: workspace:^
+        version: link:../compiler
+      '@boringapi/core':
+        specifier: workspace:^
+        version: link:../core
+      '@types/node':
+        specifier: ^18.11.17
+        version: 18.11.17
+      typescript:
+        specifier: ^4.9.4
+        version: 4.9.4
+    devDependencies:
+      '@boringapi/typegen':
+        specifier: workspace:^
+        version: link:../typegen
+      ts-node:
+        specifier: ^10.9.1
+        version: 10.9.1(@types/node@18.11.17)(typescript@4.9.4)
+      zod:
+        specifier: ^3.20.2
+        version: 3.20.2
+
+  packages/cli:
+    dependencies:
+      '@boringapi/analyzer':
+        specifier: workspace:^
+        version: link:../analyzer
+      '@boringapi/build':
+        specifier: workspace:^
+        version: link:../build
+      '@boringapi/compiler':
+        specifier: workspace:^
+        version: link:../compiler
+      '@boringapi/dev':
+        specifier: workspace:^
+        version: link:../dev
+      '@boringapi/scaffold':
+        specifier: workspace:^
+        version: link:../scaffold
+      '@types/node':
+        specifier: ^18.11.17
+        version: 18.11.17
+    devDependencies:
+      '@boringapi/core':
+        specifier: workspace:^
+        version: link:../core
+      '@boringapi/typegen':
+        specifier: workspace:^
+        version: link:../typegen
+      ts-node:
+        specifier: ^10.9.1
+        version: 10.9.1(@types/node@18.11.17)(typescript@4.9.4)
+      typescript:
+        specifier: ^4.9.4
+        version: 4.9.4
+      zod:
+        specifier: ^3.20.2
+        version: 3.20.2
+
+  packages/compiler:
+    dependencies:
+      '@types/node':
+        specifier: ^18.11.17
+        version: 18.11.17
+      ts-node:
+        specifier: ^10.9.1
+        version: 10.9.1(@types/node@18.11.17)(typescript@4.9.4)
+      typescript:
+        specifier: ^4.9.4
+        version: 4.9.4
+
   packages/core:
     dependencies:
       '@types/express':
@@ -87,15 +201,88 @@ importers:
       express:
         specifier: ^4.18.2
         version: 4.18.2
+      zod:
+        specifier: ^3.20.2
+        version: 3.20.2
+    devDependencies:
       ts-node:
         specifier: ^10.9.1
         version: 10.9.1(@types/node@18.11.17)(typescript@4.9.4)
       typescript:
         specifier: ^4.9.4
         version: 4.9.4
+
+  packages/dev:
+    dependencies:
+      '@boringapi/analyzer':
+        specifier: workspace:^
+        version: link:../analyzer
+      '@boringapi/compiler':
+        specifier: workspace:^
+        version: link:../compiler
+      '@boringapi/core':
+        specifier: workspace:^
+        version: link:../core
+      '@types/node':
+        specifier: ^18.11.17
+        version: 18.11.17
+    devDependencies:
+      ts-node:
+        specifier: ^10.9.1
+        version: 10.9.1(@types/node@18.11.17)(typescript@4.9.4)
+      typescript:
+        specifier: ^4.9.4
+        version: 4.9.4
+
+  packages/scaffold:
+    dependencies:
+      '@boringapi/analyzer':
+        specifier: workspace:^
+        version: link:../analyzer
+      '@boringapi/compiler':
+        specifier: workspace:^
+        version: link:../compiler
+      '@boringapi/core':
+        specifier: workspace:^
+        version: link:../core
+      '@boringapi/typegen':
+        specifier: workspace:^
+        version: link:../typegen
+      '@types/node':
+        specifier: ^18.11.17
+        version: 18.11.17
+      typescript:
+        specifier: ^4.9.4
+        version: 4.9.4
+    devDependencies:
+      '@boringapi/build':
+        specifier: workspace:^
+        version: link:../build
+      ts-node:
+        specifier: ^10.9.1
+        version: 10.9.1(@types/node@18.11.17)(typescript@4.9.4)
       zod:
         specifier: ^3.20.2
         version: 3.20.2
+
+  packages/typegen:
+    dependencies:
+      '@boringapi/compiler':
+        specifier: workspace:^
+        version: link:../compiler
+      '@boringapi/core':
+        specifier: workspace:^
+        version: link:../core
+      '@types/node':
+        specifier: ^18.11.17
+        version: 18.11.17
+      typescript:
+        specifier: ^4.9.4
+        version: 4.9.4
+    devDependencies:
+      ts-node:
+        specifier: ^10.9.1
+        version: 10.9.1(@types/node@18.11.17)(typescript@4.9.4)
 
 packages:
 

@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   verify:
-    name: Verify version and tests
+    name: Verify package versions and tests
     runs-on: ubuntu-22.04
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -35,12 +35,7 @@ jobs:
         id: version
         shell: bash
         run: |
-          version="$(node -p "require('./packages/core/package.json').version")"
-          expected_tag="v${version}"
-          if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
-            echo "Tag '$GITHUB_REF_NAME' does not match package version '$expected_tag'." >&2
-            exit 1
-          fi
+          version="$(node scripts/release-plan.js --version)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
@@ -64,7 +59,7 @@ jobs:
           pnpm example:fullstack:build
 
   package:
-    name: Build npm package
+    name: Build npm packages
     needs: verify
     runs-on: ubuntu-22.04
     steps:
@@ -83,29 +78,20 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build npm tarball
+      - name: Build and pack all packages
         shell: bash
         run: |
           mkdir release-assets
-          pnpm --filter @boringapi/core pack --pack-destination release-assets
+          pnpm build
+          pnpm pack:packages release-assets
 
       - name: Verify npm tarball contents
         shell: bash
         run: |
-          package_file="$(find release-assets -maxdepth 1 -type f -name '*.tgz' -print -quit)"
-          if [[ -z "$package_file" ]]; then
-            echo "npm pack did not create a tarball." >&2
-            exit 1
-          fi
-          tar -xOf "$package_file" package/package.json > packed-package.json
-          packed_version="$(node -p "require('./packed-package.json').version")"
-          if [[ "$packed_version" != "${{ needs.verify.outputs.version }}" ]]; then
-            echo "Packed version '$packed_version' does not match release version '${{ needs.verify.outputs.version }}'." >&2
-            exit 1
-          fi
-          node scripts/check-package.js "$package_file"
+          node scripts/release-plan.js release-assets
+          node scripts/check-package.js release-assets/*.tgz
 
-      - name: Upload npm package
+      - name: Upload npm packages
         uses: actions/upload-artifact@v4
         with:
           name: npm-package-${{ needs.verify.outputs.version }}
@@ -114,7 +100,7 @@ jobs:
           retention-days: 14
 
   release:
-    name: Publish npm package and GitHub release
+    name: Publish npm packages and GitHub release
     needs:
       - verify
       - package
@@ -135,29 +121,34 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
 
-      - name: Download npm package
+      - name: Download npm packages
         uses: actions/download-artifact@v5
         with:
           name: npm-package-${{ needs.verify.outputs.version }}
           path: release-assets
 
-      - name: Publish package to npm
+      - name: Publish packages to npm in dependency order
         shell: bash
         env:
           RELEASE_VERSION: ${{ needs.verify.outputs.version }}
         run: |
-          package_name="$(node -p "require('./packages/core/package.json').name")"
-          package_file="$(find release-assets -maxdepth 1 -type f -name '*.tgz' -print -quit)"
-          if [[ -z "$package_file" ]]; then
-            echo "The npm package artifact is missing." >&2
-            exit 1
-          fi
-
-          if npm view "${package_name}@${RELEASE_VERSION}" version --json >/dev/null 2>&1; then
-            echo "${package_name}@${RELEASE_VERSION} is already published; skipping npm publish."
-          else
-            npm publish "$package_file" --access public
-          fi
+          node scripts/release-plan.js release-assets > release-plan.tsv
+          while IFS=$'\t' read -r package_name package_file integrity; do
+            if npm view "${package_name}@${RELEASE_VERSION}" dist.integrity --json > registry-version.json 2> registry-error.txt; then
+              published_integrity="$(node -p "require('./registry-version.json')")"
+              if [[ "$published_integrity" != "$integrity" ]]; then
+                echo "${package_name}@${RELEASE_VERSION} exists with different contents. Choose a new release version." >&2
+                exit 1
+              fi
+              echo "${package_name}@${RELEASE_VERSION} already contains this exact artifact; skipping."
+            else
+              if ! node -e "if (require('./registry-version.json').error?.code !== 'E404') process.exit(1)"; then
+                cat registry-error.txt >&2
+                exit 1
+              fi
+              npm publish "$package_file" --access public
+            fi
+          done < release-plan.tsv
 
       - name: Create SHA-256 checksums
         shell: bash

@@ -5,6 +5,22 @@ project's own instructions and use the guide shipped with its installed version.
 The [README](../README.md) is the package entry point; the linked references cover
 detailed contracts. This is consumer guidance, not framework contributor guidance.
 
+Install `@boringapi/core` and `zod` as runtime dependencies, and `@boringapi/cli`
+as a development dependency. Build with development dependencies available.
+For production, install with `npm ci --omit=dev` and run `node dist/boring-start.cjs`
+(or the application's compiled custom server). Adjust the path for a custom
+`outDir`. The generated start script requires no CLI, TypeScript or source files.
+For custom source bootstraps, install `@boringapi/compiler` as a direct development
+dependency. Keep `@boringapi/compiler/register` in development bootstraps and tests, outside compiled
+server entry points. Browser code and shared schemas must not import development
+package runtime code; the architecture checker rejects those imports, including aliases and
+re-exports. `boring init` places Core and Zod only in `dependencies` and CLI only in
+`devDependencies`, preserving existing versions and reporting moves. Conflicting
+versions across those sections must be resolved before initialization. Build output
+reserves `boring-start.cjs` and `.boring-build.json`; avoid source files or directories
+that emit to those paths and keep output separate from `.boring/build.json`.
+See [deployment](cli.md) and [package responsibilities and APIs](packages.md).
+
 ## Start with the existing application
 
 1. Read the project's `AGENTS.md`, `package.json`, TypeScript configuration and

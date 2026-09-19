@@ -10,7 +10,7 @@ import { spawnSync } from "node:child_process";
 const application = join(__dirname, "..");
 
 it("checks the fullstack application and prevents HTTP-free permission bypass through pages", async () => {
-    const cli = join(require.resolve("@boringapi/core/package.json"), "../dist/cli.js");
+    const cli = join(require.resolve("@boringapi/cli/package.json"), "../bin/boring.cjs");
     const checked = spawnSync(process.execPath, [cli, "check"], { cwd: application, encoding: "utf8" });
     assert.equal(checked.status, 0, checked.stdout + checked.stderr);
     const { createOrders } = await import("../modules/orders/facade");

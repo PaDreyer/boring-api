@@ -5,7 +5,7 @@ application. The repository [AGENTS.md](../../AGENTS.md) also applies. This is o
 consumer with one PostgreSQL database, React SPA and server-rendered order pages.
 The specifics below supplement the shared workflow.
 
-- Build Core with `pnpm build`, then inspect with `pnpm example:fullstack:inspect` before adding functionality. Reuse `orders.create` and
+- Build all packages with `pnpm build`, then inspect with `pnpm example:fullstack:inspect` before adding functionality. Reuse `orders.create` and
   `orders.get`; do not add another orders service, database pool or request helper.
 - Keep the PostgreSQL schema in `infra/db/migrations.ts`. Append migrations;
   never edit applied SQL. Parameterize SQL and validate rows with shared schemas.

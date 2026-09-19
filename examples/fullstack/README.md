@@ -59,13 +59,13 @@ static assets. Keep the compiled server output and generated static assets
 together. Apply migrations explicitly before starting, including in deployment.
 The build contains the SQL migration list, so migrations can also run with
 `node examples/fullstack/dist/migrate.js` after compilation.
-`boring start` starts only the API; use this example's server for combined static
+`node dist/boring-start.cjs` starts only the API; use this example's server for combined static
 hosting. The sample has no client-side URL router or HTML fallback hiding API 404s.
 
 For a standalone consumer, put `@boringapi/core`, `zod`, `pg`, `react` and
-`react-dom` in dependencies, and Vite plus the corresponding `@types` packages
+`react-dom` in dependencies, and `@boringapi/cli`, `@boringapi/compiler`, `ts-node`, `typescript`, Vite and the corresponding `@types` packages
 in devDependencies, as this workspace already does. Replace `workspace:^` with
-a published Core version when copying it outside the repository. Its tsconfig
+matching published workspace package versions when copying it outside the repository. Its tsconfig
 currently extends the repository compiler defaults; replace that extension with
 standalone compiler options (or extend `.boring/tsconfig.json`), enable
 `jsx: "react-jsx"`, and map Vite's `$modules` alias to the modules directory.

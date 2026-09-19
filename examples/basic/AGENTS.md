@@ -20,7 +20,7 @@ through `@boringapi/core/agent-guide` in their installed package.
   module <name>` or `pnpm --filter @boringapi/example-basic exec boring add
   endpoint '<path/method>'`. Extend an existing domain first; review generated
   adapters and their inherited hooks/access rules.
-- Build Core first with `pnpm build`, then run `pnpm example:check`,
+- Build all packages first with `pnpm build`, then run `pnpm example:check`,
   `pnpm typecheck`, `pnpm test` and `pnpm example:build`. Start the compiled
   server with `pnpm example:start`.
 

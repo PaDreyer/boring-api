@@ -2,7 +2,7 @@ packages:
   - packages/*
   - examples/*
 
-# Core's Zod peer is also needed by prepare during production-only installs.
+# Install the runtime schema peer for workspace consumers.
 autoInstallPeers: true
 
 # Keep the existing TypeScript 4.9-compatible declaration dependency.

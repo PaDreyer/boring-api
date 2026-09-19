@@ -2,7 +2,7 @@
 
 [Package README](../README.md) · [Agent guide](agent-guide.md)
 
-Use the application’s package scripts for normal development. The commands below also work through `npx boring` after installing `@boringapi/core`.
+Use the application’s package scripts for normal development. The commands below also work through `npx boring` after installing `@boringapi/cli` as a development dependency alongside the runtime `@boringapi/core` and `zod`.
 
 ## Commands
 
@@ -45,27 +45,49 @@ Add these scripts to the `package.json` of an application that uses Boring API:
     "inspect": "boring inspect",
     "sync": "boring sync",
     "build": "boring build",
-    "start": "boring start"
+    "start": "node dist/boring-start.cjs"
   }
 }
 ```
 
-For deployment, copy the complete build output, including `.boring-build.json`,
-and install the application's runtime dependencies. `boring start` uses `./dist`
-when the local `.boring/build.json` reference is absent. Source files, generated
-types and a TypeScript configuration are not required to start that deployment.
-Explicit alternatives are:
+For deployment, build with development dependencies installed, then copy the complete
+build output and the application's `package.json` and lockfile. Install only runtime
+dependencies in the deployment and run the generated entry point:
+
+```bash
+npm ci --omit=dev
+node dist/boring-start.cjs
+# Optional: PORT=3000 node dist/boring-start.cjs
+```
+
+Every successful build writes `boring-start.cjs` in its output directory. It starts
+the selected API, resolves compiled routes relative to itself, and uses `PORT`
+(default 4040). Source files, generated types, TypeScript configuration, the CLI,
+`typescript` and `ts-node` are not required. For a custom `outDir`, adjust the start
+script, for example `node release/server/boring-start.cjs`. The filename
+`boring-start.cjs` and the metadata file `.boring-build.json` are reserved;
+conflicting compiler output, including directories at these paths, is rejected before
+replacing the previous build. Custom application servers can instead use
+`BoringApi.createApp()` or `listen()` from their compiled JavaScript entry point.
+Keep source compiler registration in a separate development bootstrap.
+The generated entry point uses Node's default `SIGINT`/`SIGTERM` termination.
+Use a custom server when the application needs to close pools or other resources
+through its own shutdown handlers.
+
+`boring start` remains a convenience when the development CLI is installed. It
+selects the last successful build using `.boring/build.json`, or `./dist` if that
+reference is absent. It reads the build's `.boring-build.json`. Explicit targets:
 
 ```bash
 boring start --out-dir release/server       # select a complete build directory
-boring start --project tsconfig.server.json # use this configuration's outDir
+boring start --project tsconfig.server.json # read this configuration's outDir
 boring start release/server/api             # select compiled API files directly
 ```
 
 The direct API path also accepts `--dir`. Choose one target selection method;
-`--port` works with each. A missing build produces an error asking you to build
-first. Start never compiles source or regenerates types. Failed builds preserve
-the previous output and do not change the default start target.
+`--port` works with each. `--project` uses the CLI's TypeScript configuration reader.
+Start never compiles source or regenerates types. Failed builds preserve the
+previous output and do not change the default start target.
 
 ## Generate an application, module or endpoint
 
@@ -98,7 +120,10 @@ node -p "require.resolve('@boringapi/core/agent-guide')"
 
 `init` does not install packages or configure authentication/storage. It creates
 missing dependency entries and scripts in an existing package.json while preserving
-existing values. Conflicting script names, an ESM package, existing application
+existing versions. Core and Zod are placed only in `dependencies`, and CLI only in
+`devDependencies`. Entries in the other section are moved and reported. Different
+versions of the same required package in both sections must be resolved before
+initialization. Conflicting script names, an ESM package, existing application
 directories or generated-file collisions stop initialization before source is
 written. Use a new directory when the existing project needs a different setup.
 
@@ -230,14 +255,15 @@ The build rewrites `$modules` and `$infra` imports, re-exports, literal dynamic 
 CommonJS requires to relative file paths. These paths follow TypeScript's emitted
 extensions, including `.jsx` with `jsx: "preserve"`. Declaration output also
 receives resolved paths, including nested import types, and the generated handler
-types. Source maps retain source locations. The output runs with ordinary Node
-or `boring start`. A successful build records its output directory in
+types. Source maps retain source locations. The output includes `boring-start.cjs` for ordinary Node; `boring start` is also
+available with the development CLI installed. A successful build records its output directory in
 `.boring/build.json` and the emitted API path in the output's `.boring-build.json`.
 The emitted API path is relative to the build directory so deployments can move
 without retaining the original source paths.
 
 Build output must stay inside the consumer project and outside application source
-and `.boring/types`. The first build requires an empty output directory; subsequent
+and `.boring/types`. It must not overlap the reserved `.boring/build.json` reference,
+which must be a regular file if it already exists. The first build requires an empty output directory; subsequent
 successful builds replace their own output, removing stale routes. The default
 `dist` directory is excluded from TypeScript's default file search, just like an
 explicit `outDir`. Failed checks
@@ -249,12 +275,13 @@ bundle dependencies or copy arbitrary assets. Plain `tsc` does not rewrite the s
 modules with separate `.d.ts` declarations, the editor uses the declarations and
 the source compiler loads the executable JavaScript companion. For a custom
 source server or test runner, register it **before loading application modules**
-in a small JavaScript bootstrap outside the scanned API directory:
+in a small JavaScript bootstrap outside the scanned API directory. Install
+`@boringapi/compiler` as a direct development dependency for this bootstrap:
 
 ```js
 // bootstrap.cjs
 const { join } = require("node:path");
-const { registerTypeScript } = require("@boringapi/core/register");
+const { registerTypeScript } = require("@boringapi/compiler/register");
 const stop = registerTypeScript(join(__dirname, "src/api"));
 require("./src/server.ts");
 // Call stop() when the compiler is no longer needed.
@@ -269,6 +296,19 @@ Use relative imports from those tests into the application; the registered
 compiler handles `$modules` and `$infra` inside application source. The registration accepts an
 optional second argument naming a TypeScript configuration file and is scoped to
 the API's parent directory. Use an absolute API path. Run `boring check` separately
-for source type and architecture checks. Compiled applications need no registration.
+for source type and architecture checks. Compiled applications need no registration and must not import `@boringapi/compiler/register`.
+Install `ts-node` as a direct development dependency if your own test scripts invoke it.
 If the entry script itself uses these aliases, preload the registration before
 the script is compiled, as shown in the [fullstack example](https://github.com/PaDreyer/boring-api/tree/master/examples/fullstack).
+
+## Package entry points
+
+`@boringapi/core` exports the HTTP runtime and public handler types.
+`@boringapi/core/client` is the standalone browser transport.
+`@boringapi/core/conventions` exposes the compiler-free filesystem convention model
+used by both startup and tooling, so structural validation remains shared.
+Programmatic type generation is exported from `@boringapi/typegen`; source compiler
+registration is exported from `@boringapi/compiler/register`. Analysis, builds,
+scaffolding and the development server have their own packages. CLI only dispatches
+to their public APIs; Core depends on none of them. See
+[package responsibilities and programmatic APIs](packages.md).

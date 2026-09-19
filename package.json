@@ -6,7 +6,7 @@
     "build": "pnpm --filter \"./packages/*\" -r run build",
     "dev": "pnpm --filter \"./packages/*\" -r --parallel run dev",
     "typecheck": "pnpm -r run typecheck",
-    "test": "pnpm -r run test",
+    "test": "node scripts/check-workspaces.js && pnpm -r run test",
     "check": "pnpm build && pnpm typecheck && pnpm test",
     "example:dev": "pnpm --filter @boringapi/example-basic dev",
     "example:check": "pnpm --filter @boringapi/example-basic check",
@@ -21,6 +21,7 @@
     "example:fullstack:web": "pnpm --filter @boringapi/example-fullstack web",
     "example:fullstack:migrate": "pnpm --filter @boringapi/example-fullstack migrate",
     "example:fullstack:build": "pnpm --filter @boringapi/example-fullstack build",
-    "example:fullstack:start": "pnpm --filter @boringapi/example-fullstack start"
+    "example:fullstack:start": "pnpm --filter @boringapi/example-fullstack start",
+    "pack:packages": "node scripts/pack-packages.js"
   }
 }

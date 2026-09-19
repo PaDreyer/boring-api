@@ -1,0 +1,70 @@
+{
+  "name": "@boringapi/compiler",
+  "version": "0.1.0",
+  "description": "TypeScript configuration, alias resolution and source compilation for Boring API",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "docs",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "author": "Paul Dreyer",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PaDreyer/boring-api.git",
+    "directory": "packages/compiler"
+  },
+  "bugs": {
+    "url": "https://github.com/PaDreyer/boring-api/issues"
+  },
+  "homepage": "https://github.com/PaDreyer/boring-api#readme",
+  "keywords": [
+    "api",
+    "filesystem",
+    "typescript",
+    "express",
+    "convention"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json",
+    "./register": {
+      "types": "./dist/register.d.ts",
+      "require": "./dist/register.js",
+      "default": "./dist/register.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "register": [
+        "dist/register.d.ts"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-package.js",
+    "dev": "tsc --watch --preserveWatchOutput",
+    "typecheck": "tsc --noEmit",
+    "prepack": "node ../../scripts/build-package.js",
+    "test": "node --test -r ts-node/register test/*.test.ts"
+  },
+  "dependencies": {
+    "@types/node": "^18.11.17",
+    "typescript": "^4.9.4",
+    "ts-node": "^10.9.1"
+  },
+  "devDependencies": {}
+}

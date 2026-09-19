@@ -61,14 +61,8 @@ jobs:
         if: matrix.node-version == '24'
         run: pnpm example:fullstack:build
 
-      - name: Verify packed core package
-        if: matrix.node-version == '24'
+      - name: Verify packed packages and production installation
         run: |
           mkdir release-assets
-          pnpm --filter @boringapi/core pack --pack-destination release-assets
+          pnpm pack:packages release-assets
           node scripts/check-package.js release-assets/*.tgz
-
-      - name: Verify production-only installation
-        run: |
-          pnpm install --prod --frozen-lockfile
-          pnpm --filter @boringapi/example-basic exec boring --help

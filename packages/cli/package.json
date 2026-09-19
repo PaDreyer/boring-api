@@ -1,0 +1,64 @@
+{
+  "name": "@boringapi/cli",
+  "version": "0.1.0",
+  "description": "Command-line interface for the Boring API development packages",
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "docs",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "author": "Paul Dreyer",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PaDreyer/boring-api.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/PaDreyer/boring-api/issues"
+  },
+  "homepage": "https://github.com/PaDreyer/boring-api#readme",
+  "keywords": [
+    "api",
+    "filesystem",
+    "typescript",
+    "express",
+    "convention"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "boring": "./bin/boring.cjs"
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-package.js",
+    "dev": "tsc --watch --preserveWatchOutput",
+    "typecheck": "tsc --noEmit",
+    "prepack": "node ../../scripts/build-package.js",
+    "test": "node --test -r ts-node/register test/*.test.ts"
+  },
+  "dependencies": {
+    "@boringapi/compiler": "workspace:^",
+    "@boringapi/analyzer": "workspace:^",
+    "@boringapi/build": "workspace:^",
+    "@boringapi/scaffold": "workspace:^",
+    "@boringapi/dev": "workspace:^",
+    "@types/node": "^18.11.17"
+  },
+  "devDependencies": {
+    "typescript": "^4.9.4",
+    "ts-node": "^10.9.1",
+    "zod": "^3.20.2",
+    "@boringapi/core": "workspace:^",
+    "@boringapi/typegen": "workspace:^"
+  }
+}

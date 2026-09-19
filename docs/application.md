@@ -241,7 +241,7 @@ modules are checked too. It does not execute setup, hooks, routes or dependencie
 | A module's facade or private implementation | Its own files, other modules' public facades/schemas, infrastructure, packages and Node builtins. |
 | Public `schemas` | Other public schemas, Zod and type-only Boring API imports. Keep runtime server code out of shared contracts. |
 | Infrastructure | Other infrastructure, public schemas, packages and Node builtins. Type-only facade imports may describe an adapter contract; infrastructure must not call business facades. |
-| Browser source in `web/client` | Other browser files, public schemas, browser-appropriate packages, `@boringapi/core/client` and type-only generated `$client`. No local server modules, Node builtins or runtime imports from the core server entry point. |
+| Browser source in `web/client` | Other browser files, public schemas, browser-appropriate packages, `@boringapi/core/client` and type-only generated `$client`. No local server modules, Node builtins or runtime imports from the core server entry point or development packages (`compiler`, `typegen`, `analyzer`, `build`, `scaffold`, `dev`, `cli`), including subpaths and aliases. |
 | Server pages in `web/server` | Other server page files, public facades/schemas, Boring API and Zod. Setup injects existing facades. No infrastructure or SDK imports; modules and infrastructure cannot import pages. |
 
 Routes and hooks are entry points: application files must not import them.

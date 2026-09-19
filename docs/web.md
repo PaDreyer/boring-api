@@ -49,8 +49,8 @@ the repository; it is not included in the npm package.
 For a consumer, include browser source in TypeScript checking and configure your
 browser bundler to resolve `$modules` to the sibling modules directory. `$client`
 is type-only and needs no runtime bundler alias. Boring API’s build compiles the
-server; use your frontend build tool for browser assets. `boring start` starts the
-API. For combined static hosting, use a custom server with `BoringApi.createApp()`
+server; use your frontend build tool for browser assets. `node dist/boring-start.cjs`
+starts the compiled API without development tools. For combined static hosting, use a custom server with `BoringApi.createApp()`
 as described in the [CLI reference](cli.md#integrating-with-an-existing-server).
 
 ## Generated browser contracts

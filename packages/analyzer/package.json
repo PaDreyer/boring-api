@@ -1,0 +1,63 @@
+{
+  "name": "@boringapi/analyzer",
+  "version": "0.1.0",
+  "description": "Static project analysis, architecture checks and inspection for Boring API",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "docs",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "author": "Paul Dreyer",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PaDreyer/boring-api.git",
+    "directory": "packages/analyzer"
+  },
+  "bugs": {
+    "url": "https://github.com/PaDreyer/boring-api/issues"
+  },
+  "homepage": "https://github.com/PaDreyer/boring-api#readme",
+  "keywords": [
+    "api",
+    "filesystem",
+    "typescript",
+    "express",
+    "convention"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-package.js",
+    "dev": "tsc --watch --preserveWatchOutput",
+    "typecheck": "tsc --noEmit",
+    "prepack": "node ../../scripts/build-package.js",
+    "test": "node --test -r ts-node/register test/*.test.ts"
+  },
+  "dependencies": {
+    "@boringapi/core": "workspace:^",
+    "@boringapi/compiler": "workspace:^",
+    "@boringapi/typegen": "workspace:^",
+    "@types/node": "^18.11.17",
+    "typescript": "^4.9.4"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.1",
+    "zod": "^3.20.2"
+  }
+}

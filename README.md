@@ -15,7 +15,7 @@ Working with an agent? Start with the [Agent guide](docs/agent-guide.md).
 Requires Node.js 18 or newer.
 
 ```bash
-npm exec --package=@boringapi/core -- boring init my-api
+npm exec --package=@boringapi/cli -- boring init my-api
 cd my-api
 npm install
 npm run sync
@@ -28,8 +28,12 @@ To add Boring API to an existing project:
 
 ```bash
 npm install @boringapi/core zod
+npm install --save-dev @boringapi/cli
 ```
 
+`@boringapi/core` is the runtime; `@boringapi/cli` runs the independently packaged
+[development tools](docs/packages.md).
+The compiled API starts with Node and needs neither the CLI nor TypeScript.
 Use `npx boring` or package scripts to run the CLI. See [configuration and custom servers](docs/cli.md) for manual integration.
 
 ## How it works
@@ -101,7 +105,7 @@ Runnable examples live in the repository: [basic API](https://github.com/PaDreye
 
 ## Contributing
 
-The repository uses pnpm workspaces: the published package lives in `packages/core`,
+The repository uses pnpm workspaces: the published packages live in `packages/*`,
 and `examples/basic` and `examples/fullstack` are private consumer workspaces.
 
 See the [contributor guide](https://github.com/PaDreyer/boring-api/blob/master/CONTRIBUTING.md) for repository setup, tests and releases. Report bugs through [GitHub Issues](https://github.com/PaDreyer/boring-api/issues).

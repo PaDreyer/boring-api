@@ -5,7 +5,7 @@ import { it } from "node:test";
 
 const application = join(__dirname, "..");
 function inspect(...args: string[]): string {
-    const cli = join(require.resolve("@boringapi/core/package.json"), "../dist/cli.js");
+    const cli = join(require.resolve("@boringapi/cli/package.json"), "../bin/boring.cjs");
     const result = spawnSync(process.execPath, [cli, "inspect", ...args], {
         cwd: application, encoding: "utf8", maxBuffer: 2 * 1024 * 1024,
     });

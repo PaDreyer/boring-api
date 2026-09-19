@@ -8,8 +8,8 @@ dist
 
 .idea
 
-# Core package documentation is copied from the repository during build/pack.
-/packages/core/README.md
-/packages/core/LICENSE
-/packages/core/docs/
+# Package documentation is copied from the repository during build/pack.
+/packages/*/README.md
+/packages/*/LICENSE
+/packages/*/docs/
 /release-assets/

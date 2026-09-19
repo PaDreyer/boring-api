@@ -24,6 +24,29 @@ it("checks the fullstack application and prevents HTTP-free permission bypass th
     assert.equal(calls, 0);
 });
 
+it("runs order rules and audit writes through the transaction repository", async () => {
+    const { createOrders } = await import("../modules/orders/facade");
+    const records = new Map<string, { id: string; item: string; quantity: number }>();
+    const writes: string[] = [];
+    let transactions = 0;
+    const orders = createOrders({
+        async transaction(operation) {
+            transactions++;
+            return operation({
+                async insert(value) { records.set(value.id, value); writes.push("order"); },
+                async recordCreation(_value, actorId) { writes.push(`audit:${actorId}`); },
+                async find(id) { return records.get(id); },
+            });
+        },
+    });
+    const actor = { id: "operator", permissions: ["orders:create", "orders:read"] as const };
+    const created = await orders.create({ input: { item: "Notebook", quantity: 2 }, actor });
+    assert.deepEqual(writes, ["order", "audit:operator"]);
+    assert.deepEqual(await orders.get({ id: created.id, actor }), created);
+    await assert.rejects(orders.get({ id: randomUUID(), actor }), { status: 404 });
+    assert.equal(transactions, 3);
+});
+
 it("persists API and page results in PostgreSQL, rolls back failed business writes and validates migrations", {
     skip: !process.env.BORING_TEST_DATABASE_URL && "Set BORING_TEST_DATABASE_URL to run the real PostgreSQL integration test.",
 }, async () => {

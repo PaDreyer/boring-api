@@ -1,12 +1,22 @@
 # Boring API
 
-A convention-driven API framework for TypeScript, Express 4 and Zod 3. Folders define URL paths, method files handle requests, and named hooks provide shared behavior. No router registration or decorators.
+Predictable backend architecture for applications built with coding agents.
 
-- **Routes from files:** `api/orders/[id]/get.ts` handles `GET /orders/:id`.
-- **Inferred types:** schemas and hook return values type inputs, services, sessions and responses.
-- **Shared business operations:** facades serve API routes, jobs and server-rendered pages.
-- **Enforced boundaries:** static checks keep storage, business logic and presentation in their intended places.
-- **Built-in tooling:** scaffold, inspect, watch, check and build from one CLI.
+Boring API gives application responsibilities named places, makes existing
+operations discoverable and rejects forbidden dependencies with static checks.
+Its goal is to keep a backend consistent as people and agents repeatedly extend it.
+It uses TypeScript, Express 4 and Zod 3.
+
+- **Known places for behavior:** facades coordinate use cases, services hold business rules, and infrastructure implements storage and external integrations.
+- **Enforced boundaries:** mandatory checks reject imports that bypass the supported application boundaries, including unused source and aliases.
+- **Discover before extending:** inspect existing operations, schemas and entry points; generators reuse the same checked application model.
+- **Typed HTTP conventions:** filesystem routes and named hooks describe requests, validation, identity and responses.
+
+Today the framework provides an HTTP runtime, module import checks, web integration
+patterns and development/build tooling. The target extends this architecture to
+background jobs, schedules, events, commands and a common application lifecycle.
+The [project vision](docs/vision.md) is the design brief;
+the [roadmap](docs/roadmap.md) records current enforcement gaps and delivery milestones.
 
 Working with an agent? Start with the [Agent guide](docs/agent-guide.md).
 
@@ -46,9 +56,11 @@ api/
     ├── post.ts          POST /orders
     └── [id]/get.ts      GET /orders/:id
 modules/orders/
-├── facade.ts            public business operations
+├── facade.ts            public operations and orchestration
+├── service.ts           private business rules
+├── repository.ts        private storage contract when needed
 └── schemas.ts           shared Zod contracts
-infra/                   database and external adapters
+infra/                   storage and external adapters
 ```
 
 Routes select schemas and call the facade registered by `+setup.ts`:
@@ -88,6 +100,7 @@ Source commands default to `api/`; pass `--dir src/api` for another location. Se
 
 All guides below are included in the npm package.
 
+- [Project vision](docs/vision.md) and [delivery roadmap](docs/roadmap.md) — the backend architecture we are building and what remains to implement.
 - [Agent guide](docs/agent-guide.md) — workflow, ownership rules and common decisions.
 - [CLI and deployment](docs/cli.md) — scaffolding, aliases, development and production.
 - [Routes, modules and permissions](docs/application.md) — application structure and checked boundaries.

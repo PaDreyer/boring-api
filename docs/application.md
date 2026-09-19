@@ -135,6 +135,13 @@ example has no tenant or ownership model.
 
 ## Application modules
 
+This reference describes the current implementation. The accepted
+[project vision](vision.md) defines the complete backend architecture; the
+[roadmap](roadmap.md#milestone-1--enforce-one-application-architecture) tracks the
+stricter role and invocation rules still to implement. In particular, today's
+same-module private-file access and module-to-infrastructure imports are known
+enforcement gaps, not the intended architectural freedom for new code.
+
 Use this structure when building an application with Boring API:
 
 ```text
@@ -151,7 +158,9 @@ app/
 │   │   ├── facade.ts            role grants and shared permission checks
 │   │   └── schemas.ts           permission catalog and actor/rule types
 │   └── orders/
-│       ├── facade.ts            public business operations
+│       ├── facade.ts            public operations and orchestration
+│       ├── service.ts           private business rules
+│       ├── repository.ts        private storage contract
 │       └── schemas.ts           public Zod schemas and inferred types
 └── infra/
     └── memoryStore.ts           demonstration storage adapter
@@ -166,17 +175,23 @@ reserved `+` files.
 | Boundary | Responsibility |
 | --- | --- |
 | Endpoints | Select input/output schemas, declare route access rules, call `ctx.services.<module>` and set HTTP status. |
-| `modules/<name>/facade.ts` | Expose business operations with explicit inputs and actor identity. Check business permissions for every caller, including jobs or server-rendered pages. |
+| `modules/<name>/facade.ts` | Expose operations with explicit inputs and actor identity. Check access for every caller and coordinate private services, transactions and dependencies. |
 | `modules/<name>/schemas.ts` | Share Zod schemas and inferred data types. Keep contracts independent of server clients so browser code can reuse them later. |
-| `modules/<name>/internal/` | Optional private implementation details. Introduce this directory only when the facade needs to be split. |
-| `infra/` | Implement storage and external clients. Keep these dependencies out of endpoint handlers. |
+| `modules/<name>/service.ts` | Implement domain rules and use cases without HTTP or database driver imports. Keep this file private to its module. |
+| `modules/<name>/repository.ts` | Define the narrow storage port needed by the service when the domain persists data. Keep the port private and expose its type through the facade for infrastructure adapters. |
+| `modules/<name>/internal/` | Optional additional private implementation details when the service needs to be split. |
+| `infra/` | Implement repository ports and external clients. Keep SQL and SDK calls out of the facade and service. |
 | `+setup.ts` | Create infrastructure and inject it into facades once per application. Return facades through the existing `ctx.services` contract. |
 
 Other modules use a module's `facade.ts` and `schemas.ts`, never its internal files.
+`boring check` rejects imports of a module's private `service.ts` from
+routes, setup, infrastructure, browser code, server pages and other modules,
+including type-only imports, aliases and re-exports. A service is imported only
+inside its owning module; callers use the public facade.
 Keep dependencies acyclic. A facade can start as a single factory function; no
-framework base class, decorator, service wrapper or repository layer is required.
-Add private helpers as the module grows. Before adding a new module, look for an
-existing facade that owns the business operation.
+framework base class or decorator is required. Put domain behavior in a private
+service and define a repository port when storage is needed. Before adding a new
+module, look for the existing facade and service that own the operation.
 
 For example, the orders module shares these contracts between its create and get
 endpoints:
@@ -195,16 +210,17 @@ export type CreateOrder = z.infer<typeof createOrder>;
 export type Order = z.infer<typeof order>;
 ```
 
-The example's `createOrders(store)` factory exposes `create({ input, actor })` and
-`get({ id, actor })`. They require `orders:create` and `orders:read`, respectively;
-`get` throws
-`HttpError(404, "Order not found")` for an unknown order. These explicit errors are
-handled by the normal Boring API error pipeline. The facade accepts plain values
-and does not depend on an Express request or response. Non-HTTP callers must
-validate untrusted input with the shared schemas and supply a trusted actor;
-the facade still checks its business permissions.
+The example's `createOrders(repository)` facade exposes `create({ input, actor })`
+and `get({ id, actor })`. It checks `orders:create` and `orders:read`, then calls
+its private service. The service validates inputs, constructs orders, uses the
+repository port and raises a domain error for a missing order. The facade maps
+that error to `HttpError(404, "Order not found")` for the normal Boring API error
+pipeline. Neither facade nor service depends on an Express request or response.
+Non-HTTP callers supply a trusted
+actor; the same facade enforces permissions for them.
 
-The setup hook supplies the storage implementation:
+The setup hook supplies the storage adapter, which satisfies the module's
+repository port:
 
 ```ts
 // api/+setup.ts

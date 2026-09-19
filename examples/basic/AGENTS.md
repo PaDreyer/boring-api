@@ -8,8 +8,9 @@ through `@boringapi/core/agent-guide` in their installed package.
 - Inspect with `pnpm example:inspect` (`--json` for structured output), from the
   repository root. The API is `examples/basic/api`; its sibling directories hold
   the modules and infrastructure.
-- Reuse the orders facade's `create` and `get` operations, shared schemas and
-  injected store. `modules/access/schemas.ts` owns permissions;
+- Reuse the orders facade's `create` and `get` operations, its private service,
+  repository port, shared schemas and injected memory adapter.
+  `modules/access/schemas.ts` owns permissions;
   `modules/access/facade.ts` owns explicit role grants and `requireAccess`.
   Enforce access in both route declarations and business operations.
 - The `BORING_API_TOKEN` hook and memory store are demonstration code. Keep

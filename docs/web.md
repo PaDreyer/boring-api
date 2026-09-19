@@ -2,7 +2,7 @@
 
 [Package README](../README.md) · [Agent guide](agent-guide.md)
 
-Keep storage behind injected facades and reuse those operations from every presentation surface.
+Keep storage behind repository adapters and reuse facade operations from every presentation surface.
 
 ## Database and presentation ownership
 
@@ -15,7 +15,9 @@ api/+setup.ts                         initialize adapters and wire facades/pages
 api/orders/post.ts                    create through the orders facade
 api/orders/[id]/get.ts                read through the same facade
 api/pages/orders/[id]/get.ts          return rendered HTML, envelope = false
-modules/orders/facade.ts             operations, permissions, transactions
+modules/orders/facade.ts             permissions and transaction orchestration
+modules/orders/service.ts            private order rules and use cases
+modules/orders/repository.ts         private storage and transaction ports
 modules/orders/schemas.ts            shared Zod contracts
 infra/db/database.ts                 one PostgreSQL connection pool and adapter
 infra/db/migrations.ts               the database schema's migration history
@@ -24,8 +26,9 @@ web/client/main.tsx                  React SPA
 web/server/pages.ts                  HTML rendering using the injected facade
 ```
 
-The orders facade owns its transaction: order and audit event either both commit
-or both roll back. The adapter uses one checked-out connection for the whole
+The orders facade selects the transaction boundary, while its private service
+creates the order and audit event through one repository. Both writes commit or
+roll back together. The adapter uses one checked-out connection for the whole
 transaction, parameterized SQL and Zod validation of returned rows. This follows
 the [node-postgres transaction contract](https://node-postgres.com/features/transactions).
 Migration SQL lives in one append-only list; a database lock serializes migration

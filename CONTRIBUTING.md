@@ -3,6 +3,21 @@
 This document is for working on the framework repository. For application development,
 start with the [package README](README.md) and [agent guide](docs/agent-guide.md).
 
+## Product direction and design changes
+
+Read the accepted [project vision](docs/vision.md) and [delivery roadmap](docs/roadmap.md)
+before changing the framework. Boring API is being built into a backend framework
+whose architecture remains predictable during repeated changes by people and
+coding agents. Its conventions must cover every supported entry point and its
+business, infrastructure and lifecycle dependencies.
+
+Develop the next roadmap milestone as a coherent change to the shared application
+model. Define the responsibility and allowed dependencies, enforce them with
+diagnostics and negative tests, expose them through inspection and generation,
+and demonstrate runtime and failure behavior in a real consumer. A convention
+described only in prose is not an implemented guarantee. Preserve the distinction
+between current support and target behavior when updating status and release notes.
+
 ## Workspace layout
 
 The repository uses native pnpm workspaces:
@@ -85,7 +100,9 @@ it, that test is skipped.
 
 ## Documentation and package checks
 
-Keep the README focused on installation, a short example and documentation links.
+Keep the README focused on the architectural promise, current capabilities,
+installation, a short example and documentation links. Preserve the accepted vision;
+record implementation progress and remaining acceptance criteria in the roadmap.
 Update `docs/agent-guide.md` and the relevant reference when conventions or workflows
 change. Generated consumer `AGENTS.md` stays short and points to the installed guide.
 Repository `AGENTS.md` contains contributor instructions.

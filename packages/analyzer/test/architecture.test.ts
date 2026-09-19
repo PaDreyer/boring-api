@@ -129,6 +129,25 @@ it("rejects foreign internals through aliases, re-exports and type imports while
     });
 });
 
+it("keeps services private to their owning module across every application layer", () => {
+    project({
+        "api/+setup.ts": 'import { run } from "../modules/orders/service"; export const setup = () => ({ run });',
+        "api/get.ts": 'import { run } from "../modules/orders/service"; export const handler = run;',
+        "modules/orders/facade.ts": 'import { run } from "./service"; export const createOrders = () => ({ run });',
+        "modules/orders/service.ts": 'export type Input = string; export const run = (input: Input) => input;',
+        "modules/billing/facade.ts": 'export { run } from "@app/modules/orders/service";',
+        "infra/store.ts": 'import type { Input } from "../modules/orders/service"; export type Stored = Input;',
+        "web/server/pages.ts": 'import { run } from "../../modules/orders/service"; export const page = run;',
+        "web/client/page.ts": 'import { run } from "../../modules/orders/service"; export const page = run;',
+    }, root => {
+        const { diagnostics } = inspect(root);
+        assert.equal(diagnostics.length, 6);
+        assert.ok(diagnostics.every(diagnostic => diagnostic.code === "BORING102"));
+        assert.ok(diagnostics.every(diagnostic => diagnostic.message.includes("service.ts is private")));
+        assert.ok(!diagnostics.some(diagnostic => diagnostic.file.fileName === join(root, "modules/orders/facade.ts")));
+    });
+});
+
 it("uses real paths so a facade-shaped symlink cannot expose another module's internals", () => {
     project({
         "api/get.ts": 'import { value } from "../modules/alias/facade"; export const handler = () => value;',

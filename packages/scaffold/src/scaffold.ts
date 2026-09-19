@@ -186,8 +186,8 @@ export function addModule(projectRoot: string, apiDirectory: string, name: strin
     const files = writeChanges(root, changes, () => { checked(root, api, projectFile, true); }, () => { analyzeProject(root, api, projectFile); });
     return { files, notes: [
         `Inspected existing modules: ${catalog.modules.map(module => module.name).join(", ") || "none"}.`,
-        `Implement ${factoryName(name)} with the needed business operations and schemas, then wire it in ${slash(relative(root, api))}/+setup.ts.`,
-        `Import the factory from $modules/${name}/facade and return the service from setup; inject infrastructure there.`,
+        `Implement business rules in ${slash(relative(root, target))}/service.ts and expose coordinated operations through ${factoryName(name)}; define shared schemas in schemas.ts.`,
+        `Add a private repository.ts port if storage is needed. Import $modules/${name}/facade in ${slash(relative(root, api))}/+setup.ts, inject its infrastructure adapter and return the facade.`,
     ] };
 }
 

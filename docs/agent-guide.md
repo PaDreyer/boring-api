@@ -5,6 +5,14 @@ project's own instructions and use the guide shipped with its installed version.
 The [README](../README.md) is the package entry point; the linked references cover
 detailed contracts. This is consumer guidance, not framework contributor guidance.
 
+The [project vision](vision.md) explains the common architecture: entry points
+delegate to facades, facades coordinate services, and business code uses injected
+ports implemented by infrastructure. Preserve those responsibilities even where
+the installed checker is still more permissive. The [roadmap](roadmap.md) identifies
+the remaining enforcement and backend-runtime work; planned jobs, schedules, events
+and commands are not yet shipped framework conventions. Use the current references
+for available APIs and do not invent parallel entry-point or service registries.
+
 Install `@boringapi/core` and `zod` as runtime dependencies, and `@boringapi/cli`
 as a development dependency. Build with development dependencies available.
 For production, install with `npm ci --omit=dev` and run `node dist/boring-start.cjs`
@@ -37,7 +45,7 @@ updating them. Framework release automation is documented in the
    Inspection is static; it does not execute application modules. If it fails,
    fix the diagnostics and run it again.
 4. Extend the module that already owns the behavior. Search public facades and
-   schemas even if they are not yet exposed through `ctx.services`. Keep one
+   schemas, then its private service and repository port. Keep one
    implementation of each business operation across HTTP, jobs and web pages.
 
 Direct CLI commands below assume `api/`. Pass `--dir src/api` (or the actual API
@@ -52,30 +60,37 @@ before invoking their CLI. See [inspection](inspection.md) and [CLI configuratio
 | Change | Place and pattern |
 | --- | --- |
 | Another route for existing behavior | A method file under `api/`, calling the existing `ctx.services` operation. |
-| New behavior in an existing domain | Extend `modules/<name>/facade.ts` and reuse its schemas and injected dependencies. |
+| New behavior in an existing domain | Implement rules in its private `service.ts`, expose the operation through `facade.ts`, and reuse its schemas and injected dependencies. |
 | A genuinely separate domain | Generate a module, implement its public operations, then wire its factory in root `+setup.ts`. |
 | Shared data contract | `modules/<name>/schemas.ts`; derive TypeScript types from Zod. Keep it browser-safe. |
-| Growing implementation | Private files in the owning module; add `internal/` when useful. Other modules import only `facade` or `schemas`. |
-| Database, configuration or external SDK | Sibling `infra/`; construct adapters in setup and inject narrow interfaces into facades. |
+| Storage contract | Private `modules/<name>/repository.ts`; describe only the operations the service needs. |
+| Growing implementation | Preserve facade, service and port responsibilities when splitting code. A private helper must not become an alternative caller of services or infrastructure. Other modules use public facade operations and schemas. |
+| Database, configuration or external SDK | Sibling `infra/`; implement repository ports, construct adapters in setup and inject them into facades. |
 | Authentication or route access | Root `+auth.ts`; reuse the application's identity provider and permission catalog. |
 | Shared request behavior | Named `+middleware`, `+envelope` or `+error` hooks at the appropriate URL scope. |
 | SPA | Sibling `web/client/`; reuse shared schemas and the application's typed API client. |
 | Server-rendered page / MPA | Sibling `web/server/`; receive existing facades through setup, validate input and escape HTML. |
 
-Small facades are plain factory functions. No `Facade`/`Service` base class,
-decorator, separate registry or forwarding-only service/repository layer is
-needed. Keep module dependencies acyclic. [Exact import rules and diagnostics](application.md#checked-import-boundaries).
+Facades are plain factory functions. They coordinate access, transactions and
+private services; services own business behavior, and repository ports describe
+storage needs. Add a repository port only for a module that persists data. No
+base class, decorator or separate registry is needed. Keep module dependencies
+acyclic. Invoke a module's services through its owning facade. Today's checker
+rejects imports from outside the module, including aliases and type-only references;
+the stricter within-module caller rule remains a tracked roadmap requirement.
+[Exact import rules and diagnostics](application.md#checked-import-boundaries).
 
 ## Implement a feature
 
 1. Define or reuse the public input/output schemas. Keep browser-safe contracts
    separate from server implementations and infer types from the schemas.
-2. Implement the business operation in the owning facade. Pass typed inputs and
-   a trusted actor explicitly; enforce permissions and resource ownership there
-   so non-HTTP callers receive the same protection. Validate untrusted input
-   from non-HTTP callers with the shared schemas too.
-3. If a new dependency is needed, construct it once in root `api/+setup.ts`,
-   inject it into the facade, and return the facade for `ctx.services`.
+2. Implement domain behavior in the owning module's private service. Use shared
+   schemas to validate untrusted input and a narrow repository port for storage.
+   Expose the use case through its facade with an explicit trusted actor. Enforce
+   permissions and resource ownership for non-HTTP callers too.
+3. Define repository ports in the owning module and implement them in sibling
+   `infra/`. Construct adapters once in root `api/+setup.ts`, inject them into
+   the facade, and return the facade for `ctx.services`.
 4. Add the thin HTTP adapter. Import method-specific handlers from `./$types`,
    select schemas, declare access, call `ctx.services`, set status when needed,
    and return the payload.
@@ -84,7 +99,8 @@ needed. Keep module dependencies acyclic. [Exact import rules and diagnostics](a
    Finish with the project's check, test and build scripts.
 
 Use `npx boring add module invoices` only for a new domain. It generates
-`facade.ts` and `schemas.ts`; implement them and wire setup yourself.
+`facade.ts`, private `service.ts` and `schemas.ts`; implement them and wire setup
+yourself. Add a private `repository.ts` when persistence is needed.
 `npx boring add endpoint 'orders/lookup/[id]/get' --from 'orders/[id]/get'` reuses
 an existing compatible adapter. Review its access declarations and arguments.
 Without a matching adapter, the generator produces a typed 501 stub. Generators
@@ -160,8 +176,9 @@ project. `GET /health` returns HTTP 200 with `{"status":"ok"}`.
   `envelope = false`. [Request lifecycle and hook contexts](reference.md).
 - **Checks:** `boring check` is mandatory; fix `BORING` diagnostics at their source.
   Dev/start are not substitutes for static checks. The import checker does not
-  detect duplicated business logic or prevent passing raw storage via services;
-  retain the ownership rules above.
+  detect duplicated business logic or prevent passing raw storage via services.
+  These are recorded enforcement gaps; follow the facade/service/port ownership
+  rules even where the checker does not yet enforce the complete model.
 
 ## Reuse storage and web integrations
 

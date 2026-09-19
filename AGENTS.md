@@ -2,14 +2,24 @@
 
 ## Project intent
 
-Boring API maps filesystem conventions to HTTP routes and cross-cutting behavior. A route should be recognizable from its path and named exports without reading router wiring. The package entry point is `README.md`; detailed contracts live in `docs/`. Update the relevant reference and `docs/agent-guide.md` whenever a convention or recommended workflow changes. Keep the README concise and generated consumer `AGENTS.md` focused on project context plus a pointer to the installed guide. Contributor setup and release instructions belong in `CONTRIBUTING.md`.
+Boring API is being built into a backend framework that makes architecture predictable, discoverable and mechanically enforced during continued work by people and coding agents. The accepted design brief is [docs/vision.md](docs/vision.md); read it and [docs/roadmap.md](docs/roadmap.md) before changing the framework. Preserve this direction across tasks so the user never has to explain it again. Filesystem HTTP routing is one application of the model. The product scope includes jobs, schedules, event consumers, application commands, persistence, infrastructure and execution lifecycle.
+
+The package entry point is `README.md`; lead it with this architectural promise and describe current capabilities honestly. Detailed current contracts live in `docs/`. Update the relevant reference and `docs/agent-guide.md` whenever a convention or recommended workflow changes. Keep the README concise and generated consumer `AGENTS.md` focused on project context plus a pointer to the installed guide. Contributor setup and release instructions belong in `CONTRIBUTING.md`.
+
+## Architecture decisions and progress
+
+- Judge changes against the whole backend model: entry point -> facade -> service -> repository or other port -> adapter, with explicit composition and lifecycle. Every supported entry point must reuse the same public application operations.
+- Give every responsibility a named, discoverable role and define its imports, exports, calls and lifetime. Prefer predictable decomposition into convention-following files. Generic private/internal/helper code must not become an architectural escape hatch.
+- Documentation alone does not enforce a pattern. Deliver the shared convention model, checks and bypass tests, inspection, generation, runtime behavior where needed, and a reference example together. Checks remain mandatory.
+- Treat current permissive behavior as an implementation gap when it conflicts with the vision. Do not preserve it as a design principle, widen rules to make an example pass, or claim a target rule is already enforced.
+- Work through the roadmap's dependency order. Keep incomplete acceptance criteria open and update status with concrete implementation and test evidence. The next milestone is the complete role and enforcement model, before expanding to additional runtimes.
 
 ## Where things belong
 
 - `packages/core/src/core`: discovery, request pipeline, context, shared types and errors.
 - `packages/core/src`: the reusable library only. Do not add application routes or a fixed server here.
 - `examples/basic/api`: a separate example consumer. A route is `<URL folders>/<HTTP method>.ts` below the consumer's chosen API directory.
-- Consumer `modules/<name>/facade.ts` and `schemas.ts` are public entry points; other module files are private. Sibling `infra/` holds adapters, `web/client/` marks browser source, and `web/server/` holds server presentation adapters wired by setup.
+- Consumer `modules/<name>/facade.ts` and `schemas.ts` are public entry points; other module files are private. Privacy does not grant access across roles: the owning facade invokes services, services use ports, and setup injects concrete adapters. The roadmap tracks gaps in enforcing this model. Sibling `infra/` holds adapters, `web/client/` marks browser source, and `web/server/` holds server presentation adapters wired by setup.
 - Use `$modules/<name>/...` and `$infra/<path>` for imports across those directories where architecture rules permit them. Both aliases follow the selected API's sibling directories through editor, source compiler and build resolution; same-module imports can stay relative.
 - `+setup.ts` and `+auth.ts`: root-only setup and authentication/authorization.
 - `+middleware.ts`: available at any URL folder; inherited from root to leaf.

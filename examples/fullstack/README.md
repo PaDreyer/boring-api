@@ -85,10 +85,13 @@ runs directly with Node; the build has rewritten its aliases to relative paths.
   migrations. The runner checks applied checksums and runs pending SQL inside
   a transaction guarded by a database lock. It never runs on normal requests.
 - `infra/db/database.ts` owns the pool and parameterized SQL. It exposes a narrow
-  typed order store and validates row shapes with the public Zod schema.
-- `modules/orders/facade.ts` checks permissions and input, then chooses the atomic
-  transaction: order and audit event succeed or fail together. Actor identity is
-  passed per call and never retained in the shared facade.
+  typed repository and validates row shapes with the public Zod schema.
+- `modules/orders/repository.ts` defines the storage and transaction ports;
+  `modules/orders/service.ts` validates inputs and implements order creation,
+  audit writing and lookup without importing `pg`.
+- `modules/orders/facade.ts` checks permissions and chooses the atomic transaction:
+  order and audit event succeed or fail together. Actor identity is passed per
+  call and never retained in the shared facade.
 - Setup builds one orders facade, then injects it into the page renderer. HTTP
   routes use the same instance through `ctx.services`. Page rendering escapes
   untrusted strings; shared schemas remain safe for browser imports.

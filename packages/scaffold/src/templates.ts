@@ -6,10 +6,13 @@ export function factoryName(name: string): string {
 
 export function moduleTemplate(name: string): Record<string, string> {
     return {
-        "facade.ts": `/** Public business operations. Inject infrastructure here; pass actors per call. */
+        "facade.ts": `/** Public entry point: check access and coordinate private services and injected adapters. */
 export function ${factoryName(name)}() {
     return {};
 }
+`,
+        "service.ts": `/** Private business rules for this module. Add operations as the domain takes shape. */
+export {};
 `,
         "schemas.ts": `// Define shared Zod schemas here and infer their TypeScript types.
 // Reuse existing public schemas before adding a new contract.
@@ -130,7 +133,8 @@ Keep project-specific instructions here; do not copy the package guide into this
 
 - API and hooks: \`${api}/\`. Setup: \`${api}/+setup.ts\`.
 - Business modules: \`${modules}/<name>/facade.ts\` and \`schemas.ts\` are public;
-  other module files are private. Import public entries through \`$modules\`.
+  private \`service.ts\` holds business rules. Add a private \`repository.ts\` port
+  when storage is needed. Import public entries through \`$modules\`.
 - Infrastructure: \`${infra}/\`, imported through \`$infra/<path>\` where allowed.
   Setup constructs adapters and injects them into facades returned as services.
 - Web source, if added: \`${posix.join(parent, "web/client")}/\` for the browser,
@@ -142,7 +146,8 @@ Keep project-specific instructions here; do not copy the package guide into this
 
 1. Run \`npm run sync\` after checkout and \`npm run inspect\` before adding code
    (\`npm run inspect -- --json\` for structured output). Read the existing operations
-   and extend their owning modules; reuse schemas, infrastructure and web clients.
+   and reuse their public facade operations. Extend business rules in the owning
+   module's service; preserve the architecture explained in the installed guide.
 2. Keep routes thin: generated \`./$types\`, shared schemas, access declarations,
    calls to \`ctx.services\`, status and returned payloads. Enforce permissions in
    business operations too; pass actors per call and keep request state out of
@@ -171,8 +176,9 @@ GET /health returns \`{ "status": "ok" }\` through the shared health facade and
 schema. It is public; no identity provider or persistent storage is configured.
 
 Run \`npm run inspect\` before extending an existing module. Add a new domain
-with \`boring add module invoices${argument}\`. Implement its public operations,
-inject infrastructure in \`${api}/+setup.ts\`, and return the facade there.
+with \`boring add module invoices${argument}\`. Put business rules in its private
+\`service.ts\`, expose operations through \`facade.ts\`, inject infrastructure in
+\`${api}/+setup.ts\`, and return the facade there.
 Add HTTP adapters with \`boring add endpoint invoices/get${argument}\`.
 Without an existing template, a new adapter returns 501 until implemented.
 To reuse health at another URL, run

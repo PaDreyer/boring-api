@@ -9,7 +9,8 @@ The specifics below supplement the shared workflow.
   `orders.get`; do not add another orders service, database pool or request helper.
 - Keep the PostgreSQL schema in `infra/db/migrations.ts`. Append migrations;
   never edit applied SQL. Parameterize SQL and validate rows with shared schemas.
-  The facade decides what runs inside one transaction, including audit records.
+  The facade selects the transaction boundary; the private orders service writes
+  the order and audit event through the repository port in one transaction.
 - Setup owns dependency construction. Infrastructure never calls business
   operations. Add external SDKs behind this same boundary, not in routes or pages.
   Import adapters/configuration via `$infra/<path>` and public module entries via

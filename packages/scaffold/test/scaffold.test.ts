@@ -173,10 +173,11 @@ it("adds a minimal domain module and points back to existing modules without cha
     const root = fixture("app/http");
     const setup = readFileSync(join(root, "app/http/+setup.ts"), "utf8");
     const generated = addModule(root, "app/http", "order-items");
-    assert.deepEqual(generated.files, ["app/modules/order-items/facade.ts", "app/modules/order-items/schemas.ts"]);
+    assert.deepEqual(generated.files, ["app/modules/order-items/facade.ts", "app/modules/order-items/service.ts", "app/modules/order-items/schemas.ts"]);
     assert.match(readFileSync(join(root, generated.files[0]), "utf8"), /function createOrderItems/);
+    assert.match(readFileSync(join(root, generated.files[1]), "utf8"), /Private business rules/);
     assert.equal(readFileSync(join(root, "app/http/+setup.ts"), "utf8"), setup);
-    assert.match(generated.notes.join("\n"), /wire it in app\/http\/\+setup.ts/);
+    assert.match(generated.notes.join("\n"), /Import \$modules\/order-items\/facade in app\/http\/\+setup.ts/);
     assert.throws(() => addModule(root, "app/http", "health"), /already exists.*createHealth/);
     checked(root, "app/http");
 });

@@ -243,7 +243,10 @@ export function checkArchitecture(program: ts.Program, apiDirectory: string, gen
             } else if (to.kind === "api") {
                 fail("BORING104", "Routes and hooks are entry points, not dependencies. Move shared behavior into a module facade or schemas.");
             } else if (to.kind === "module" && (!to.module || (!to.entry && (from.kind !== "module" || from.module !== to.module)))) {
-                fail("BORING102", `Module internals are private: '${edge.specifier}'. Import the module's facade.ts or schemas.ts instead.`);
+                const service = edge.target && /^service\.[cm]?[jt]sx?$/.test(basename(edge.target));
+                fail("BORING102", service
+                    ? `Module service.ts is private to '${to.module}': '${edge.specifier}'. Call its public facade through setup/ctx.services or import that facade from another module.`
+                    : `Module internals are private: '${edge.specifier}'. Import the module's facade.ts or schemas.ts instead.`);
             } else if (from.kind === "browser" || (from.kind === "module" && from.entry === "schemas")) {
                 const local = from.kind === "browser" && to.kind === "browser";
                 const schema = to.kind === "module" && to.entry === "schemas";

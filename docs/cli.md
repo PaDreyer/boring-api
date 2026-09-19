@@ -136,10 +136,12 @@ boring add endpoint invoices/get --dir src/api
 ```
 
 `add module` accepts a lowercase name such as `invoices` or `order-items` and
-creates only `facade.ts` and `schemas.ts`. The factory starts empty: implement
-the domain's operations and schemas, then import the factory via `$modules` in
-`+setup`, inject infrastructure and return the service. The generator prints this
-wiring guidance instead of rewriting an application's setup function. Existing
+creates `facade.ts`, private `service.ts` and `schemas.ts`. The factory and service
+start empty: implement domain rules in the service, expose coordinated operations
+through the facade, then import the factory via `$modules` in `+setup`, inject
+infrastructure and return the facade. Add a private `repository.ts` port when
+the domain needs storage. The generator prints this wiring guidance instead of
+rewriting an application's setup function. Existing
 modules are reported with their public exports and must be extended in place.
 
 `add endpoint` takes a filesystem route ending in a lowercase HTTP method, with

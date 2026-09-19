@@ -1,0 +1,182 @@
+import { basename, dirname, posix } from "path";
+
+export function factoryName(name: string): string {
+    return `create${name.split("-").map(part => part[0].toUpperCase() + part.slice(1)).join("")}`;
+}
+
+export function moduleTemplate(name: string): Record<string, string> {
+    return {
+        "facade.ts": `/** Public business operations. Inject infrastructure here; pass actors per call. */
+export function ${factoryName(name)}() {
+    return {};
+}
+`,
+        "schemas.ts": `// Define shared Zod schemas here and infer their TypeScript types.
+// Reuse existing public schemas before adding a new contract.
+export {};
+`,
+    };
+}
+
+export function endpointTemplate(method: string): string {
+    const handler = `${method[0].toUpperCase()}${method.slice(1)}Handler`;
+    return `import { HttpError } from "@boringapi/core";
+import type { ${handler} } from "./$types";
+
+export const handler: ${handler} = () => {
+    // Reuse public schemas and call an existing operation through ctx.services.
+    // Declare its authentication/authorization requirements before serving data.
+    throw new HttpError(501, "Not implemented");
+};
+`;
+}
+
+/** API paths are validated before interpolating them into scripts or instructions. */
+export function consumerScripts(api: string): Record<string, string> {
+    const argument = api === "api" ? "" : ` ${api}`;
+    return {
+        dev: `boring dev${argument}`,
+        check: `boring check${argument}`,
+        inspect: `boring inspect${argument}`,
+        sync: `boring sync${argument}`,
+        build: `boring build${argument}`,
+        start: "boring start",
+        test: `boring build${argument} && node --test test/*.test.cjs`,
+    };
+}
+
+export function consumerTemplates(api: string): Record<string, string> {
+    const parent = dirname(api);
+    const modules = posix.join(parent, "modules");
+    const infra = posix.join(parent, "infra");
+    const argument = api === "api" ? "" : ` --dir ${api}`;
+    return {
+        "tsconfig.json": JSON.stringify({
+            extends: "./.boring/tsconfig.json",
+            compilerOptions: { target: "ES2020", module: "commonjs", moduleResolution: "node",
+                esModuleInterop: true, strict: true, skipLibCheck: true, rootDir: parent, outDir: "dist",
+                declaration: true, sourceMap: true },
+            include: parent === "." ? [`${api}/**/*.ts`, `${modules}/**/*.ts`, `${infra}/**/*.ts`] : [`${parent}/**/*.ts`],
+        }, null, 2) + "\n",
+        ".gitignore": "node_modules/\n.boring/\ndist/\n",
+        [`${infra}/.gitkeep`]: "",
+        [`${api}/+setup.ts`]: `import type { SetupContext } from "./$types";
+import { createHealth } from "$modules/health/facade";
+
+export function setup(_ctx: SetupContext) {
+    return { health: createHealth() };
+}
+`,
+        [`${modules}/health/schemas.ts`]: `import { z } from "zod";
+
+export const health = z.object({ status: z.literal("ok") });
+export type Health = z.infer<typeof health>;
+`,
+        [`${modules}/health/facade.ts`]: `import type { Health } from "./schemas";
+
+export function createHealth() {
+    return { get(): Health { return { status: "ok" }; } };
+}
+`,
+        [`${api}/health/get.ts`]: `import { health } from "$modules/health/schemas";
+import type { GetHandler } from "./$types";
+
+export const output = health;
+export const handler: GetHandler = ctx => ctx.services.health.get();
+`,
+        "test/health.test.cjs": `const assert = require("node:assert/strict");
+const { it } = require("node:test");
+const { join } = require("node:path");
+const { request } = require("node:http");
+const { BoringApi } = require("@boringapi/core");
+
+it("serves the health contract", async () => {
+    const app = await new BoringApi().createApp(join(__dirname, "../dist/${basename(api)}"));
+    const server = await new Promise((resolve, reject) => {
+        const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+        listening.once("error", reject);
+    });
+    try {
+        const response = await new Promise((resolve, reject) => {
+            const req = request({ hostname: "127.0.0.1", port: server.address().port, path: "/health" }, res => {
+                let body = "";
+                res.setEncoding("utf8");
+                res.on("data", chunk => { body += chunk; });
+                res.on("end", () => resolve({ status: res.statusCode, body }));
+            });
+            req.on("error", reject);
+            req.end();
+        });
+        assert.equal(response.status, 200);
+        assert.deepEqual(JSON.parse(response.body), { status: "ok" });
+    } finally {
+        await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+});
+`,
+        "AGENTS.md": `# Working on this Boring API application
+
+1. Run \`npm run inspect\` before adding code. Use \`npm run inspect -- --json\`
+   for the source-derived catalog of routes, operations, schemas, access rules and hooks.
+2. Extend existing modules and reuse their schemas and operations. Do not add a
+   competing service, copied business logic or a storage client in an endpoint.
+3. Use \`boring add module <name>${argument}\` for a new domain and
+   \`boring add endpoint <path/method>${argument}\` for a route. Endpoint templates
+   reuse a matching adapter; use \`--from <path/method>\` to choose explicitly.
+   A new adapter without a template returns 501 until implemented. Review inherited
+   hooks and authorization whenever exposing an operation at another URL.
+4. \`${api}/\` contains HTTP adapters and hooks. Routes declare schemas and access
+   rules, call \`ctx.services\`, set status and return payloads. Import method-specific
+   handler types from \`./$types\` and schemas from \`$modules/<name>/schemas\`.
+5. \`${modules}/<name>/facade.ts\` and \`schemas.ts\` are public; other module files
+   are private. Keep small modules small. Use plain factories, explicit inputs and
+   per-call actors; enforce business permissions inside the operation as well as
+   in the endpoint. Keep request state out of shared services.
+6. \`${infra}/\` owns storage and external clients. Wire dependencies once in
+   \`${api}/+setup.ts\`, import factories through \`$modules/<name>/facade\` and
+   return services. Do not expose raw storage to routes. Use relative same-module imports.
+7. Hooks use generated \`SetupContext\`, \`AuthenticationContext\`,
+   \`AuthorizationContext\`, \`MiddlewareContext\`, \`EnvelopeContext\` or
+   \`ErrorContext\` from \`./$types\`. Annotate contexts or use \`satisfies\` to
+   preserve inferred return types. Never edit or commit \`.boring/\`.
+8. Run \`npm run check\`, \`npm test\` and \`npm run build\`. Architecture checks
+   are mandatory; fix diagnostics instead of bypassing them. Add tests for new
+   behavior, validation and permission boundaries. After checkout run \`npm run sync\`.
+
+\`npm run dev\` watches the API and sibling modules and infrastructure. Use
+\`boring build\` via the build script for production; plain tsc does not rewrite
+\`$modules\`. Browser source belongs in \`web/client/\` beside the API and imports
+only browser-safe schemas, never server implementations. Keep module dependencies
+acyclic. Add real integrations behind infrastructure; never embed credentials.
+`,
+        "README.md": `# Boring API application
+
+Install dependencies, generate editor types and start developing:
+
+\`\`\`sh
+npm install
+npm run sync
+npm run check
+npm test
+npm run dev
+\`\`\`
+
+GET /health returns \`{ "status": "ok" }\` through the shared health facade and
+schema. It is public; no identity provider or persistent storage is configured.
+
+Run \`npm run inspect\` before extending an existing module. Add a new domain
+with \`boring add module invoices${argument}\`. Implement its public operations,
+inject infrastructure in \`${api}/+setup.ts\`, and return the facade there.
+Add HTTP adapters with \`boring add endpoint invoices/get${argument}\`.
+Without an existing template, a new adapter returns 501 until implemented.
+To reuse health at another URL, run
+\`boring add endpoint health/live/get${argument} --from health/get\`.
+Generators preserve existing files; inspect the generated diff and effective hooks.
+
+\`npm run dev\` restarts on changes to \`${api}\`, \`${modules}\` and \`${infra}\`.
+Use \`npm run build\` followed by \`npm start\` for compiled execution. The build
+rewrites \`$modules\` imports and checks types, conventions and architecture first.
+See AGENTS.md for the ownership and reuse rules.
+`,
+    };
+}

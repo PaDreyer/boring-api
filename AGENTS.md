@@ -33,6 +33,7 @@ Boring API maps filesystem conventions to HTTP routes and cross-cutting behavior
 - Reject ambiguous routes and invalid convention files at startup rather than silently ignoring them.
 - `boring check` must reject the same structural convention mistakes as startup and validate route and hook export contracts without executing application modules.
 - `boring inspect` uses the same static model and mandatory checks. Derive its versioned JSON catalog from source without executing application modules or maintaining a separate service registry.
+- Generators inspect existing capabilities before adding source and validate their results without executing application code. Never overwrite existing source, invent business permissions, or silently move an adapter across different inherited hooks. Use `$modules` and generated `./$types` in templates.
 - Use the public `BoringApi.createApp()` and `BoringApi.listen()` API. Do not add legacy aliases or compatibility modes.
 - Architecture checks are mandatory in `boring check`; do not add switches to disable them.
 - Keep architecture analysis static, including unused source, aliases, re-exports and literal CommonJS imports. Diagnose unsupported dynamic loading instead of silently skipping it. Use stable `BORING` diagnostic codes with source locations.

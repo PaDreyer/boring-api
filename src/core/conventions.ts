@@ -1,7 +1,7 @@
 import { Dirent, readdirSync, statSync } from "fs";
 import { extname, join, resolve } from "path";
 
-const METHODS = new Set(["get", "post", "put", "patch", "delete", "head", "options"]);
+export const HTTP_METHODS = new Set(["get", "post", "put", "patch", "delete", "head", "options"]);
 
 export interface TemplateLayer<T> {
     generic?: T;
@@ -33,6 +33,7 @@ export interface ApiSources {
     setup?: string;
     auth?: string;
     rootScope: SourceScope;
+    scopes: Map<string, SourceScope>;
 }
 
 /** Shared by runtime error handling and static inspection. Layers are root to leaf. */
@@ -52,7 +53,7 @@ function sourceName(entry: Dirent): string | undefined {
     return extension === ".ts" || extension === ".js" ? entry.name.slice(0, -extension.length) : undefined;
 }
 
-function segment(name: string): string {
+export function endpointSegment(name: string): string {
     const dynamic = /^\[([A-Za-z_][A-Za-z0-9_]*)\]$/.exec(name);
     if (dynamic) return `:${dynamic[1]}`;
     if (/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(name)) return name;
@@ -83,7 +84,7 @@ export function scanApi(apiDirectory: string): ApiSources {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error(`API directory does not exist: ${root}`);
         throw error;
     }
-    const tree: ApiSources = { routes: [], contracts: [], rootScope: { middleware: [], errors: [] } };
+    const tree: ApiSources = { routes: [], contracts: [], rootScope: { middleware: [], errors: [] }, scopes: new Map() };
     const seenRoutes = new Map<string, string>();
     function walk(directory: string, inherited: SourceScope, segments: string[]) {
         const entries = readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
@@ -96,7 +97,7 @@ export function scanApi(apiDirectory: string): ApiSources {
             if (files.has(name)) throw new Error(`Duplicate source files: ${files.get(name)} and ${file}`);
             files.set(name, file);
             if (!name.startsWith("+")) {
-                if (!METHODS.has(name)) throw new Error(`Unsupported endpoint file: ${file}`);
+                if (!HTTP_METHODS.has(name)) throw new Error(`Unsupported endpoint file: ${file}`);
                 tree.contracts.push({ file, kind: "route" });
             } else if (name === "+setup" || name === "+auth") {
                 if (segments.length) throw new Error(`${file}: ${name} is only allowed at the API root`);
@@ -117,14 +118,15 @@ export function scanApi(apiDirectory: string): ApiSources {
             errors: errors.generic || errors.statuses.size ? [...inherited.errors, errors] : inherited.errors,
         };
         if (!segments.length) tree.rootScope = scope;
+        tree.scopes.set(directory, scope);
         for (const entry of entries) {
             const file = join(directory, entry.name);
             if (entry.isDirectory()) {
-                walk(file, scope, [...segments, segment(entry.name)]);
+                walk(file, scope, [...segments, endpointSegment(entry.name)]);
                 continue;
             }
             const name = sourceName(entry);
-            if (!name || !METHODS.has(name)) continue;
+            if (!name || !HTTP_METHODS.has(name)) continue;
             const path = segments.length ? `/${segments.join("/")}` : "/";
             const key = `${name} ${path.replace(/:[A-Za-z_][A-Za-z0-9_]*/g, ":param").toLowerCase()}`;
             if (seenRoutes.has(key)) throw new Error(`Duplicate route ${key}: ${seenRoutes.get(key)} and ${file}`);

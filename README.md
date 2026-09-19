@@ -34,21 +34,27 @@ After a local installation, the command is available in the application's packag
 The standard commands handle loading, discovery, type generation, and validation:
 
 ```bash
+boring init my-api         # scaffold a consumer project
+boring add module orders  # scaffold a new domain's public entry points
+boring add endpoint orders/get # reuse a matching adapter or create a typed 501 stub
 boring dev                 # load ./api, generate types, and restart on changes
 boring check               # generate types and check the project with TypeScript
 boring inspect             # find existing routes, operations, schemas and hooks
 boring inspect --json      # the same catalog in a versioned machine-readable format
 boring build               # check and compile the consumer application
-boring start               # start the compiled API without a watcher
+boring start               # start the last successful build without a watcher
 ```
 
-The API directory defaults to `./api`. Pass another path as a positional argument or with `--dir`. The default port is 4040.
+Source commands default to the API directory `./api`. Pass another source path
+as a positional argument or with `--dir`. `boring start` automatically selects
+the last successful build, including custom output directories and API paths.
+The default port is 4040.
 
 ```bash
 boring dev src/api --port 3000
 boring check src/api
 boring build src/api
-boring start dist/api --port 3000
+boring start --port 3000
 ```
 
 `boring dev` loads TypeScript through `ts-node` and the Boring API import transformer, generates types before every restart, and watches the API directory and its sibling `modules` and `infra` directories, including directories added during development. For example, `boring dev src/api` watches `src/api`, `src/modules` and `src/infra`. Files elsewhere are not watched. `boring check` checks TypeScript, file conventions, route/hook export contracts, and application import boundaries. Architecture checks are mandatory. `boring start` loads compiled JavaScript. `boring sync` generates types and the editor configuration. Use `--project path/to/tsconfig.json` with `dev`, `check`, `inspect` or `build` to select another TypeScript configuration.
@@ -62,10 +68,100 @@ Add these scripts to the `package.json` of an application that uses Boring API:
     "check": "boring check",
     "inspect": "boring inspect",
     "build": "boring build",
-    "start": "boring start dist/api"
+    "start": "boring start"
   }
 }
 ```
+
+For deployment, copy the complete build output, including `.boring-build.json`,
+and install the application's runtime dependencies. `boring start` uses `./dist`
+when the local `.boring/build.json` reference is absent. Source files, generated
+types and a TypeScript configuration are not required to start that deployment.
+Explicit alternatives are:
+
+```bash
+boring start --out-dir release/server       # select a complete build directory
+boring start --project tsconfig.server.json # use this configuration's outDir
+boring start release/server/api             # select compiled API files directly
+```
+
+The direct API path also accepts `--dir`. Choose one target selection method;
+`--port` works with each. A missing build produces an error asking you to build
+first. Start never compiles source or regenerates types. Failed builds preserve
+the previous output and do not change the default start target.
+
+### Generate an application, module or endpoint
+
+Use the installed `boring` command (for example through `npx boring`) to start a
+consumer. `init` uses the selected project directory, defaulting to the current
+directory; it does not select an enclosing project's package.json.
+
+```bash
+boring init my-api --dir src/api
+cd my-api
+npm install
+npm run check
+npm test
+npm run dev
+```
+
+The generated application contains a public health endpoint backed by a shared
+schema and facade, a typed `+setup`, an infrastructure directory, a compiled HTTP
+test, a README and consumer `AGENTS.md`. Package scripts cover dev, sync, inspect,
+check, build, test and start. The TypeScript configuration extends the generated
+`.boring/tsconfig.json` for `$modules` and `./$types`; `.boring`, dependencies and
+build output are ignored by Git. Run the sync script after a fresh checkout.
+Dev watches the API and its sibling modules and infrastructure.
+
+`init` does not install packages or configure authentication/storage. It creates
+missing dependency entries and scripts in an existing package.json while preserving
+existing values. Conflicting script names, an ESM package, existing application
+directories or generated-file collisions stop initialization before source is
+written. Use a new directory when the existing project needs a different setup.
+
+Before adding code, inspect the application's capabilities:
+
+```bash
+npm run inspect
+boring add module invoices --dir src/api
+boring add endpoint invoices/get --dir src/api
+```
+
+`add module` accepts a lowercase name such as `invoices` or `order-items` and
+creates only `facade.ts` and `schemas.ts`. The factory starts empty: implement
+the domain's operations and schemas, then import the factory via `$modules` in
+`+setup`, inject infrastructure and return the service. The generator prints this
+wiring guidance instead of rewriting an application's setup function. Existing
+modules are reported with their public exports and must be extended in place.
+
+`add endpoint` takes a filesystem route ending in a lowercase HTTP method, with
+no extension. Quote bracket parameters in the shell. For example, after an
+application has an orders GET adapter:
+
+```bash
+boring add endpoint 'orders/lookup/[id]/get' --dir src/api
+# Choose explicitly when more than one existing adapter matches:
+boring add endpoint 'orders/archive/[id]/get' --dir src/api --from 'orders/[id]/get'
+```
+
+Automatic reuse looks in the same first static URL folder and requires one
+TypeScript adapter with the same method, URL parameter names and inherited
+middleware, envelope and error hooks. Its schemas, access declarations and
+service calls are preserved; relative imports are relocated and `./$types` refers
+to the new route. `--from` selects an adapter explicitly and enforces the same
+compatibility checks. Multiple automatic matches produce a choice diagnostic.
+Review the new URL's intended behavior; the generator does not infer business
+arguments, new permissions or new schemas. Without a matching adapter, it creates
+a minimal typed handler returning HTTP 501 until implemented.
+
+Both `add` commands inspect and validate the current application without executing
+it, then run the same checks against the generated result. A validation failure
+removes the newly generated source and restores generated types for the prior
+application. There is no force flag, overwrite mode or architecture bypass.
+Traversal, symlink destinations, case collisions and ambiguous routes are rejected.
+Use `--dir <api-directory>` for another API root and `--project <tsconfig>` with
+`add` for a custom configuration. The generated package scripts already carry the
+selected API directory; direct `boring add` commands still default to `api`.
 
 ### Integrating with an existing server
 
@@ -139,7 +235,10 @@ CommonJS requires to relative file paths. These paths follow TypeScript's emitte
 extensions, including `.jsx` with `jsx: "preserve"`. Declaration output also
 receives resolved paths, including nested import types, and the generated handler
 types. Source maps retain source locations. The output runs with ordinary Node
-or `boring start dist/api`.
+or `boring start`. A successful build records its output directory in
+`.boring/build.json` and the emitted API path in the output's `.boring-build.json`.
+The emitted API path is relative to the build directory so deployments can move
+without retaining the original source paths.
 
 Build output must stay inside the consumer project and outside application source
 and `.boring/types`. The first build requires an empty output directory; subsequent
@@ -456,7 +555,7 @@ framework is selected by the `web/client` boundary.
 Run `boring check` in development and CI. Startup still validates API structure
 and runtime hook contracts; `dev`, `start`, `sync` and `createApp` do not run the
 static architecture analysis. `boring inspect` uses the same mandatory checks
-as `boring check`. Generators are planned next. See `ROADMAP.md` in the repository
+as `boring check`, as do the `boring add` generators. See `ROADMAP.md` in the repository
 for the implementation order and `examples/basic/AGENTS.md` for the consumer workflow.
 
 ## Discover existing functionality

@@ -185,7 +185,7 @@ Validation: `yarn example:check`, `yarn typecheck`, `yarn test` (66 passing test
 the executable CLI, sync, check, inspect, source registration, dev and build, then
 started the production API after removing its original source directory. A
 regression test also confirms that dev chooses the same project configuration
-as check/build when another tsconfig is nested beside the API. Step 4 remains planned.
+as check/build when another tsconfig is nested beside the API. Generators are tracked in step 4.
 
 The follow-up audit identified four edge cases, now fixed with regression tests:
 source execution loads JavaScript companions of declaration files; default-output
@@ -210,7 +210,7 @@ consumer builds.
 
 ## 4. Generate the established patterns
 
-Status: planned. These generator commands do not exist yet.
+Status: implemented and validated.
 
 - Add `boring init`, `boring add module <name>` and
   `boring add endpoint <path/method>`.
@@ -224,6 +224,28 @@ Status: planned. These generator commands do not exist yet.
 
 Acceptance: adding another order endpoint reuses the existing orders module;
 generated code passes the same checks as handwritten code.
+
+Delivered: `boring init [project-directory] [--dir api]`, `boring add module <name>`
+and `boring add endpoint <path/method>`, with `--dir`/`--project` for an existing
+consumer and `--from` for explicit adapter reuse. The starter includes a shared
+health facade/schema, typed setup and handler, infrastructure boundary, editor
+configuration, package scripts, consumer instructions and a runnable HTTP test.
+
+Generators inspect existing modules and operations first. A unique compatible
+adapter is reused with its schemas, permissions and service calls; ambiguous
+matches require explicit selection. Different inherited hooks or URL parameter
+names prevent reuse. New adapters without a template return 501 until implemented;
+new module factories remain small and receive explicit setup wiring after their
+business operations are implemented. Source collisions and unsafe paths are
+rejected, and failed post-generation checks roll back new source.
+
+Validation: `yarn example:check`, `yarn typecheck`, `yarn test` (90 passing tests),
+`yarn build` and `yarn example:build` passed, including the parallel `boring start`
+changes. Nine generator tests cover initialized consumers, module and adapter
+reuse, schema imports, permission and hook preservation, ambiguity, unsafe paths,
+collision handling, rollback, the compiled CLI and the generated HTTP test.
+The package dry run includes the compiled generators and excludes source,
+examples and repository tests.
 
 ## 5. Provide complete database and web application paths
 

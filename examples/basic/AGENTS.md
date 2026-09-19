@@ -69,8 +69,17 @@ side effects; keep the documented ownership of storage and business operations.
 
 The token hook is a demonstration controlled by `BORING_API_TOKEN`. The memory
 store is non-persistent demonstration storage. Do not embed credentials or present
-either as a production integration. `boring init` and `boring add` are planned
-commands and are not available yet.
+either as a production integration.
+
+Generators are available through the consumer CLI. While working in this
+repository, invoke them with `yarn ts-node src/cli.ts add module <name> --dir
+examples/basic/api` or `yarn ts-node src/cli.ts add endpoint <path/method> --dir
+examples/basic/api`. Prefer extending the existing orders module. To expose the
+same order read operation at another URL, generate `orders/lookup/[id]/get` with
+`--from orders/[id]/get`. This reuses the adapter, schemas, service and access rule;
+review the new URL's intended behavior. A new adapter without a compatible
+template returns 501 until implemented. New modules need business operations
+and explicit setup wiring; generators never replace existing files.
 
 `yarn example:build` compiles the example with `tsconfig.example.json` into
 `.boring/example-build`, including its relative imports of the local library.

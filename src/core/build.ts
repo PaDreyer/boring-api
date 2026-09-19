@@ -25,6 +25,8 @@ export function buildProject(project: AnalyzedProject): { diagnostics: readonly 
     const rootDir = resolve(configured.rootDir ?? dirname(project.apiDirectory));
     const outDir = resolve(configured.outDir ?? join(root, "dist"));
     safeOutput(root, outDir);
+    const reference = join(root, ".boring", "build.json");
+    safeOutput(root, reference);
     if (configured.module !== undefined && configured.module !== ts.ModuleKind.CommonJS) throw new Error("boring build currently requires compilerOptions.module = commonjs.");
     if (configured.outFile || configured.declarationDir || configured.composite || configured.incremental || configured.emitDeclarationOnly) {
         throw new Error("boring build uses a single output directory; outFile, declarationDir, composite, incremental and emitDeclarationOnly are unsupported.");
@@ -81,7 +83,11 @@ export function buildProject(project: AnalyzedProject): { diagnostics: readonly 
     // Compilation finishes successfully in memory before touching an existing build.
     const marker = join(outDir, ".boring-build.json");
     if (existsSync(outDir) && readdirSync(outDir).length) {
-        if (!existsSync(marker) || lstatSync(marker).isSymbolicLink() || readFileSync(marker, "utf8") !== JSON.stringify({ api: project.apiDirectory })) {
+        let owner: unknown;
+        if (existsSync(marker) && !lstatSync(marker).isSymbolicLink()) {
+            try { owner = JSON.parse(readFileSync(marker, "utf8")); } catch { /* Not owned build output. */ }
+        }
+        if (!owner || typeof owner !== "object" || !("api" in owner) || owner.api !== project.apiDirectory) {
             throw new Error(`Output directory is not owned by boring build: ${outDir}. Choose an empty outDir.`);
         }
         rmSync(outDir, { recursive: true });
@@ -91,6 +97,9 @@ export function buildProject(project: AnalyzedProject): { diagnostics: readonly 
         mkdirSync(dirname(file), { recursive: true });
         writeFileSync(file, content);
     }
-    writeFileSync(marker, JSON.stringify({ api: project.apiDirectory }));
+    writeFileSync(marker, JSON.stringify({ version: 1, api: project.apiDirectory,
+        apiDirectory: relative(rootDir, project.apiDirectory).split(/[\\/]/).join("/") }));
+    mkdirSync(dirname(reference), { recursive: true });
+    writeFileSync(reference, JSON.stringify({ version: 1, outputDirectory: relative(root, outDir).split(/[\\/]/).join("/") }));
     return { diagnostics: [], output: outDir };
 }

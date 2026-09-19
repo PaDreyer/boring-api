@@ -18,7 +18,7 @@ export function compilerOptions(options: ts.CompilerOptions, apiDirectory: strin
     return { ...options, paths: { ...paths, ...modulePaths(apiDirectory) } };
 }
 
-function moduleLiteral(node: ts.StringLiteralLike): boolean {
+export function moduleLiteral(node: ts.StringLiteralLike): boolean {
     const parent = node.parent;
     return (ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent)) && parent.moduleSpecifier === node ||
         ts.isExternalModuleReference(parent) && parent.expression === node ||

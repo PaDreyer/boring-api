@@ -23,7 +23,8 @@ See [deployment](cli.md) and [package responsibilities and APIs](packages.md).
 
 Runtime and tooling packages share a platform release version. Follow the
 [release and compatibility policy](packages.md#releases-and-compatibility) when
-updating them.
+updating them. Framework release automation is documented in the
+[contributor release workflow](https://github.com/PaDreyer/boring-api/blob/master/CONTRIBUTING.md#release-workflow).
 
 ## Start with the existing application
 

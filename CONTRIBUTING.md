@@ -149,17 +149,32 @@ remain independent of the shared release schedule.
 
 ### Release workflow
 
-The workflow checks every package manifest against the tag, builds all packages,
-packs and tests those exact artifacts, then publishes in dependency order. The
-GitHub Release includes all tarballs and their checksums. Package discovery,
+The Tests workflow runs the test suites, type checks and example checks on branch
+pushes and pull requests across the supported Node.js versions. Tag pushes do not
+trigger that workflow.
+
+Tests and Release are independent workflows. Release does not wait for Tests or
+check its result; a successful Tests run is not an automated prerequisite for
+publishing. A combined branch and tag push can start both workflows concurrently.
+
+The Release workflow runs on `v<version>` tags. Its `package` job checks every
+package manifest against the tag, builds and packs all packages, and verifies the
+actual tarballs and their production installation. The `release` job depends on
+that package job and publishes those exact artifacts in dependency order.
+Repository test suites, the separate typecheck command and example builds run
+in the Tests workflow.
+
+The GitHub Release includes all tarballs and their checksums. Package discovery,
 packing and release planning share `scripts/workspaces.js`; new workspace packages
 do not need an extra list in GitHub Actions. `scripts/release-plan.js` enforces the
 shared version and matching tag; maintainers assess compatibility and choose the
 appropriate version increment using the policy above.
 
 Update every package to the next common version, refresh the lockfile and run the
-checks above. Commit the version changes with the implementation, then create and
-push the matching `v<version>` tag. GitHub Actions builds, tests and publishes the
-packages. Publishing skips an existing version only when its registry integrity
-matches the exact verified tarball. Different contents under an existing version
-fail the release; registry errors other than a missing version also fail it.
+checks above. Commit the version changes with the implementation, create the
+matching `v<version>` tag on that commit, and push the branch and tag. The tag push
+starts Release independently of the branch's Tests run. GitHub Actions builds,
+verifies and publishes the packages. Publishing skips an existing version only
+when its registry integrity matches the exact verified tarball. Different contents
+under an existing version fail the release; registry errors other than a missing
+version also fail it.

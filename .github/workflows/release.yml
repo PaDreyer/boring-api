@@ -13,8 +13,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  verify:
-    name: Verify package versions and tests
+  package:
+    name: Build and verify npm packages
     runs-on: ubuntu-22.04
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -41,43 +41,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build packages
-        run: pnpm build
-
-      - name: Check example application
-        run: pnpm example:check
-
-      - name: Check TypeScript
-        run: pnpm typecheck
-
-      - name: Run tests
-        run: pnpm test
-
-      - name: Build example applications
-        run: |
-          pnpm example:build
-          pnpm example:fullstack:build
-
-  package:
-    name: Build npm packages
-    needs: verify
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v7
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-          package-manager-cache: false
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
       - name: Build and pack all packages
         shell: bash
         run: |
@@ -94,16 +57,14 @@ jobs:
       - name: Upload npm packages
         uses: actions/upload-artifact@v4
         with:
-          name: npm-package-${{ needs.verify.outputs.version }}
+          name: npm-package-${{ steps.version.outputs.version }}
           path: release-assets/*.tgz
           if-no-files-found: error
           retention-days: 14
 
   release:
     name: Publish npm packages and GitHub release
-    needs:
-      - verify
-      - package
+    needs: package
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -124,13 +85,13 @@ jobs:
       - name: Download npm packages
         uses: actions/download-artifact@v5
         with:
-          name: npm-package-${{ needs.verify.outputs.version }}
+          name: npm-package-${{ needs.package.outputs.version }}
           path: release-assets
 
       - name: Publish packages to npm in dependency order
         shell: bash
         env:
-          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+          RELEASE_VERSION: ${{ needs.package.outputs.version }}
         run: |
           node scripts/release-plan.js release-assets > release-plan.tsv
           while IFS=$'\t' read -r package_name package_file integrity; do
@@ -178,7 +139,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+          RELEASE_VERSION: ${{ needs.package.outputs.version }}
         run: |
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release edit "$GITHUB_REF_NAME" \

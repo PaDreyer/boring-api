@@ -208,6 +208,15 @@ Der Trusted Publisher für `@boringapi/core` verwendet diese GitHub-Actions-Date
 
 Da ein Trusted Publisher erst für ein bereits existierendes npm-Paket eingerichtet werden kann, wird die erste Version einmalig interaktiv mit `npm publish --access public` veröffentlicht. Danach wird der Trusted Publisher in den Paketeinstellungen aktiviert; weitere Versionen entstehen ausschließlich durch passende Git-Tags.
 
+Für einen normalen Patch-Release erhöht `npm version patch` die Version in `package.json`, erstellt einen Release-Commit und legt den passenden Git-Tag an. Der anschließende Push überträgt Branch und Tag und startet dadurch den Release-Workflow:
+
+```bash
+npm version patch
+git push origin master --follow-tags
+```
+
+Für Minor- oder Major-Releases wird entsprechend `npm version minor` beziehungsweise `npm version major` verwendet.
+
 Der Beispielserver hört standardmäßig auf Port 4040; `PORT` kann ihn ändern.
 
 ```bash

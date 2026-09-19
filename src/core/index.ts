@@ -143,9 +143,4 @@ export class BoringApi {
             server.once("error", reject);
         });
     }
-
-    /** Legacy alias retained for existing callers. */
-    scan(apiDirectory: string, port = 4040): Promise<Server> {
-        return this.listen(apiDirectory, port);
-    }
 }

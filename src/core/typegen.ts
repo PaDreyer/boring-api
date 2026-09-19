@@ -91,9 +91,6 @@ function scan(apiDirectory: string): TypegenTree {
         for (const entry of entries) {
             const file = join(directory, entry.name);
             if (entry.isDirectory()) {
-                if (entry.name === "_base" || entry.name === "_setup") {
-                    throw new Error(`${file}: use +auth, +setup, +middleware, +envelope and +error files instead`);
-                }
                 walk(file, middlewareChain, [...segments, endpointSegment(entry.name)]);
                 continue;
             }

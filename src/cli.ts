@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from "path";
 import ts from "typescript";
 import { BoringApi } from "./core";
 import { generateTypes } from "./core/typegen";
+import { architectureFiles, checkArchitecture, formatArchitectureDiagnostics } from "./core/architecture";
 
 interface Arguments {
     command: string;
@@ -76,7 +77,7 @@ function check(root: string, apiDirectory: string): number {
     }
 
     const sourceFiles = collectSourceFiles(generated.apiDirectory);
-    fileNames = [...new Set([...fileNames, ...sourceFiles, ...generated.files])];
+    fileNames = [...new Set([...fileNames, ...architectureFiles(generated.apiDirectory), ...generated.files])];
     options = {
         ...options,
         noEmit: true,
@@ -87,10 +88,12 @@ function check(root: string, apiDirectory: string): number {
 
     const program = ts.createProgram({ rootNames: fileNames, options });
     const diagnostics = [...configDiagnostics, ...ts.getPreEmitDiagnostics(program)];
+    const architecture = checkArchitecture(program, generated.apiDirectory, generated.generatedRoot);
     if (diagnostics.length) {
         console.error(ts.formatDiagnosticsWithColorAndContext(diagnostics, formatHost(root)));
-        return 1;
     }
+    if (architecture.length) console.error(formatArchitectureDiagnostics(architecture, root));
+    if (diagnostics.length || architecture.length) return 1;
     console.info(`Checked ${sourceFiles.length} API source file${sourceFiles.length === 1 ? "" : "s"}.`);
     return 0;
 }

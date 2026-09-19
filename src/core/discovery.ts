@@ -166,9 +166,6 @@ export function discover(apiDirectory: string): Discovery {
         for (const entry of entries) {
             const file = join(dir, entry.name);
             if (entry.isDirectory()) {
-                if (entry.name === "_base" || entry.name === "_setup") {
-                    throw new Error(`${file}: use +auth, +setup, +middleware, +envelope and +error files instead`);
-                }
                 walk(file, [...segments, segment(entry.name)], scope);
                 continue;
             }

@@ -47,7 +47,7 @@ per-application demo storage, a scoped missing-order response and consumer agent
 instructions. The dev watcher covers sibling modules/infrastructure, including
 new and recreated directories. Validation: `yarn example:check`, `yarn typecheck`,
 `yarn test` (26 passing tests) and `yarn build` all passed. Module import boundaries
-remain the next step, not an already enforced guarantee.
+were deferred to step 2.
 
 ## Permission authorization (before step 2)
 
@@ -67,11 +67,11 @@ Status: complete (2026-09-19).
   invalid rules and compatibility with custom authorization contracts.
 
 Validation: `yarn example:check`, `yarn typecheck`, `yarn test` (34 passing tests)
-and `yarn build` all passed. Step 2 remains planned.
+and `yarn build` all passed. Architecture enforcement is tracked separately in step 2.
 
 ## 2. Enforce architecture boundaries with `boring check`
 
-Status: planned.
+Status: complete (2026-09-19).
 
 - Reject database and external SDK imports from endpoints.
 - Reject access to another module's internals; expose business operations through
@@ -82,14 +82,32 @@ Status: planned.
   define how dynamic imports and other unanalyzable dependencies are handled.
 - Give diagnostics stable codes, source positions, the broken rule and a useful
   repair direction. Include existing public operations when relevant.
-- Make the rules the standard for new applications, with an explicit migration
-  path for existing embedded consumers. Avoid a large configurable rule system.
+- Enforce the rules for every application, without an opt-out or migration mode.
+  There are no existing consumers to preserve. Remove the legacy `scan()` alias
+  and prototype migration branches; keep `createApp()` and `listen()` as the API.
 - Preserve parity between startup and check for structural API conventions.
 
 Acceptance: fixtures demonstrate forbidden direct DB imports and cross-module
 internal imports, including aliases/re-exports; legitimate facade and schema use
 passes. Checks do not execute application modules. Structural checks cannot
 promise to detect semantically duplicate business functions.
+
+Delivered: mandatory static architecture analysis with diagnostic codes
+`BORING101`–`BORING107`, source locations and inferred public-operation hints.
+Checks cover unused modules, aliases, re-exports, literal CommonJS/dynamic imports,
+real paths, runtime module cycles and the `web/client` browser boundary. Computed
+or unresolved dependencies and custom loaders are errors. Declaration-level
+type-only imports retain their boundary checks without introducing runtime cycle
+edges. The README documents the exact import matrix and the limits of static
+analysis; no metadata classes or configuration switches were introduced.
+
+Removed `BoringApi.scan()` and the special prototype-folder migration branches.
+The ordinary URL-directory validation still rejects invalid folder names in both
+startup and check. Permission-based authorization and its custom hook contract
+remain intact.
+
+Validation: `yarn example:check`, `yarn typecheck`, `yarn test` (48 passing tests)
+and `yarn build` all passed.
 
 ## 3. Make existing functionality discoverable
 

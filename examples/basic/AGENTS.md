@@ -42,9 +42,21 @@ repository's AGENTS.md also applies while editing this bundled example.
 - Do not add services/repositories that merely forward calls. Keep module
   dependencies acyclic and keep infrastructure independent of endpoints.
 
-These module boundaries are currently a documented application convention;
-`boring check` checks API file conventions and types, but does not enforce module
-import boundaries yet. See the repository roadmap for that next step.
+`boring check` enforces import boundaries for all application source, including
+unused modules. There is no opt-out. Method files import only public schemas,
+generated types, Boring API and Zod; hooks can also use public facades. Only
+`+setup` imports infrastructure or SDKs in the API tree. Do not import routes or
+hooks from other files, or move server helpers into an unclassified directory.
+Use declaration-level `import type` for adapter contracts and other erased
+dependencies. Runtime module dependencies must be acyclic. Literal imports,
+requires, aliases and re-exports are checked; computed paths and custom loaders
+are errors. Fix diagnostics at their source instead of bypassing the checker.
+
+If browser source is added, put it under `web/client/`. It can import public
+schemas, but cannot import local server code, Node builtins or runtime Boring API.
+Schemas themselves stay independent of server implementations. These checks
+cover imports, not values passed through `ctx.services` or arbitrary JavaScript
+side effects; keep the documented ownership of storage and business operations.
 
 The token hook is a demonstration controlled by `BORING_API_TOKEN`. The memory
 store is non-persistent demonstration storage. Do not embed credentials or present

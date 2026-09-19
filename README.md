@@ -47,7 +47,7 @@ boring check src/api
 boring start dist/api --port 3000
 ```
 
-`boring dev` loads TypeScript through `ts-node`, generates types before every restart, and watches the API directory and its sibling `modules` and `infra` directories, including directories added during development. For example, `boring dev src/api` watches `src/api`, `src/modules` and `src/infra`. Files elsewhere are not watched. `boring check` checks TypeScript, file conventions, and the export contracts of every route and hook. `boring start` is intended for compiled JavaScript. `boring sync` only generates the type files.
+`boring dev` loads TypeScript through `ts-node`, generates types before every restart, and watches the API directory and its sibling `modules` and `infra` directories, including directories added during development. For example, `boring dev src/api` watches `src/api`, `src/modules` and `src/infra`. Files elsewhere are not watched. `boring check` checks TypeScript, file conventions, route/hook export contracts, and application import boundaries. Architecture checks are mandatory. `boring start` is intended for compiled JavaScript. `boring sync` only generates the type files.
 
 Add these scripts to the `package.json` of an application that uses Boring API:
 
@@ -79,7 +79,7 @@ main().catch(error => {
 });
 ```
 
-`createApp(directory)` returns an Express application. `listen(directory, port)` starts and returns an HTTP server directly. `scan(directory, port)` remains available as a legacy alias. The loader scans the specified directory at startup and requires loadable `.ts` or `.js` files.
+`createApp(directory)` returns an Express application. `listen(directory, port)` starts and returns an HTTP server directly. The loader scans the specified directory at startup and requires loadable `.ts` or `.js` files.
 
 ## Adding a route
 
@@ -298,14 +298,70 @@ storage for each `createApp()` call; it never places records or actors in module
 globals. Its in-memory adapter loses data on restart and is not a production
 database integration.
 
-These boundaries are currently **documented conventions**. `boring check` validates
-API conventions, export contracts and TypeScript types; it does not yet reject
-cross-module internal imports or direct infrastructure imports in endpoints.
-Include all application source directories in the consumer's `tsconfig.json` so
-unused modules are also typechecked. Architecture enforcement, `boring inspect`
-and generators are planned next; they are not available commands yet. See
-`ROADMAP.md` in the repository for the implementation order and
-`examples/basic/AGENTS.md` for the consumer workflow.
+### Checked import boundaries
+
+`boring check` enforces these rules for every application. There is no disabling
+flag or compatibility mode. In addition to the consumer's `tsconfig.json` files,
+the command includes all TypeScript/JavaScript source in the selected API
+directory and its sibling `modules`, `infra` and `web/client` directories. Unused
+modules are checked too. It does not execute setup, hooks, routes or dependencies.
+
+| Source | Allowed dependencies |
+| --- | --- |
+| Method files such as `get.ts` | Public `schemas` modules, type-only generated `$types`, `@boringapi/core` and `zod`. Call business operations through `ctx.services`. Other packages and Node builtins belong behind a facade. |
+| Hooks other than `+setup` | Public facades/schemas, Boring API, Zod and Node helpers. Initialize SDKs and infrastructure in `+setup` and expose them through facades. |
+| Root `+setup` | Public facades/schemas, infrastructure, packages and Node builtins. |
+| A module's facade or private implementation | Its own files, other modules' public facades/schemas, infrastructure, packages and Node builtins. |
+| Public `schemas` | Other public schemas, Zod and type-only Boring API imports. Keep runtime server code out of shared contracts. |
+| Infrastructure | Other infrastructure, public schemas, packages and Node builtins. Type-only facade imports may describe an adapter contract; infrastructure must not call business facades. |
+| Browser source in `web/client` | Other browser files, public schemas and browser-appropriate packages. No local server modules, Node builtins or runtime Boring API imports. |
+
+Routes and hooks are entry points: application files must not import them.
+Other modules cannot access a module's private files, including via a TypeScript
+path alias or a re-export. A facade may re-export its **own** implementation files
+to make selected operations public. Shared server helpers belong in a named module
+or infrastructure, rather than an additional `utils` or `services` directory.
+
+The checker resolves import targets using TypeScript and real filesystem paths.
+It checks ES imports/re-exports, literal `import(...)`, literal `require(...)`,
+`import = require(...)` and import types, including JavaScript when `checkJs` is
+disabled. Computed module paths, aliased loaders, `require.resolve` and custom
+loaders through `node:module` are rejected because their dependencies are not
+fully checked by this model. Unresolved imports are errors too.
+
+Runtime dependencies between modules must be acyclic, including dependencies
+through private files or infrastructure. Use declaration-level `import type` or
+`export type` for erased dependencies; these still respect import boundaries but
+do not create runtime cycle edges. Other imports, including inline type
+specifiers, are conservatively treated as runtime dependencies.
+
+Diagnostics have stable codes and source locations:
+
+| Code | Meaning |
+| --- | --- |
+| `BORING101` | Endpoint or hook imports a dependency outside its allowed boundary. |
+| `BORING102` | Import accesses another module's private implementation. |
+| `BORING103` | Runtime dependency cycle between modules. |
+| `BORING104` | Import of a route/hook, or infrastructure calling a business facade. |
+| `BORING105` | Browser code or shared schemas import server code. |
+| `BORING106` | Unresolved dependency or unsupported module loader/path. |
+| `BORING107` | Dependency outside the application structure or misplaced module file. |
+
+For endpoint violations, diagnostics also list callable operations inferred from
+`+setup` when available, such as `ctx.services.orders.get`, with their declaration
+locations. No additional service registry or metadata class is required.
+
+These are static import rules, not a JavaScript sandbox or a semantic duplicate
+detector. They do not track values passed through `ctx.services`, global I/O calls
+or the runtime behavior of installed packages. Keep infrastructure private to
+facades and select browser-compatible dependencies for browser builds. No SPA/MPA
+framework is selected by the `web/client` boundary.
+
+Run `boring check` in development and CI. Startup still validates API structure
+and runtime hook contracts; `dev`, `start`, `sync` and `createApp` do not run the
+static architecture analysis. `boring inspect` and generators are planned next
+and are not available commands yet. See `ROADMAP.md` in the repository for the
+implementation order and `examples/basic/AGENTS.md` for the consumer workflow.
 
 ## Generated types
 
@@ -355,8 +411,6 @@ The filenames form the framework's contract. Shared logic does not require manua
 | `+error.ts`, `+error.404.ts`, `+error.500.ts` | Any URL folder; when an error occurs | `handler(ctx, error)` returns the error response. The nearest template applies; a matching status-specific file in the same folder takes precedence. |
 
 Middleware **stacks** along the URL path. Envelopes and error responses, by contrast, **override** an inherited template instead of being nested repeatedly. An unmatched path uses the error response defined at the API root. Empty HTTP 204 responses are not wrapped in an envelope.
-
-In the early prototype, these responsibilities lived in `_base/` and `_setup/`. These collection folders have been replaced by explicit `+` files: `_setup/*` becomes `+setup.ts`, authentication and authorization from `_base/` become `+auth.ts`, the envelope file becomes `+envelope.ts`, and `404.ts` becomes `+error.404.ts`. At startup, the legacy folders trigger a message pointing to the new conventions.
 
 Safe defaults apply when convention files are absent: no session, HTTP 401 for protected routes without a session, HTTP 403 for an authorization rule without `authorize()`, unchanged successful responses, and JSON error responses without internal server details. A default logger is provided. `+auth.ts` and `+setup.ts` replace or extend this behavior as needed. The example at `examples/basic/api/+auth.ts` uses an environment token for demonstration purposes only.
 

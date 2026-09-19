@@ -9,6 +9,7 @@ Boring API maps filesystem conventions to HTTP routes and cross-cutting behavior
 - `src/core`: discovery, request pipeline, context, shared types and errors.
 - `src`: the reusable library only. Do not add application routes or a fixed server here.
 - `examples/basic/api`: a separate example consumer. A route is `<URL folders>/<HTTP method>.ts` below the consumer's chosen API directory.
+- Consumer `modules/<name>/facade.ts` and `schemas.ts` are public entry points; other module files are private. Sibling `infra/` holds adapters, and `web/client/` marks browser source when present.
 - `+setup.ts` and `+auth.ts`: root-only setup and authentication/authorization.
 - `+middleware.ts`: available at any URL folder; inherited from root to leaf.
 - `+envelope.ts`, `+error.ts`, `+error.<status>.ts`: available at any URL folder; nearest definition overrides an ancestor.
@@ -31,8 +32,9 @@ Boring API maps filesystem conventions to HTTP routes and cross-cutting behavior
 - Do not embed passwords, tokens, or fake production integrations in examples. The example bearer-token hook is demonstration code controlled by `BORING_API_TOKEN`.
 - Reject ambiguous routes and invalid convention files at startup rather than silently ignoring them.
 - `boring check` must reject the same structural convention mistakes as startup and validate route and hook export contracts without executing application modules.
-- The prototype's `_base` and `_setup` folders are retired; do not add new behavior through them. Keep migration errors explicit.
-- Preserve the public `BoringApi.createApp()` and `BoringApi.listen()` API. `scan()` remains a compatibility alias.
+- Use the public `BoringApi.createApp()` and `BoringApi.listen()` API. Do not add legacy aliases or compatibility modes.
+- Architecture checks are mandatory in `boring check`; do not add switches to disable them.
+- Keep architecture analysis static, including unused source, aliases, re-exports and literal CommonJS imports. Diagnose unsupported dynamic loading instead of silently skipping it. Use stable `BORING` diagnostic codes with source locations.
 - The published package exposes consumer commands through `package.json#bin` as `boring`. Repository scripts use the `example:*` prefix when they run the bundled example; do not confuse them with commands copied into consumer projects.
 - Keep everything needed at runtime or by the public declaration files in `dependencies`. A packed tarball must contain the compiled library, executable CLI, README and license without source or example files.
 

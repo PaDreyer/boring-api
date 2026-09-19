@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import { requirePermissions } from "../../../../src";
+import { requirePermissions } from "@boringapi/core";
 import type { Actor, AuthorizationRule } from "./schemas";
 
 export function requireAccess(actor: Actor, rule: AuthorizationRule): void {

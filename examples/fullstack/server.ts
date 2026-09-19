@@ -1,9 +1,9 @@
 import express from "express";
 import { join, resolve } from "node:path";
-import { BoringApi } from "../../src";
-import { registerTypeScript } from "../../src/register";
+import { BoringApi } from "@boringapi/core";
+import { registerTypeScript } from "@boringapi/core/register";
 
-if (__filename.endsWith(".ts")) registerTypeScript(join(__dirname, "api"), join(__dirname, "../../tsconfig.fullstack.json"));
+if (__filename.endsWith(".ts")) registerTypeScript(join(__dirname, "api"), join(__dirname, "tsconfig.json"));
 
 async function main() {
     const app = express();

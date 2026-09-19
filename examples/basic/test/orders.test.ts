@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import { createMemoryStore } from "../examples/basic/infra/memoryStore";
-import { createOrders } from "../examples/basic/modules/orders/facade";
-import { createOrder, Order } from "../examples/basic/modules/orders/schemas";
-import { permissionsForRoles } from "../examples/basic/modules/access/facade";
+import { createMemoryStore } from "../infra/memoryStore";
+import { createOrders } from "../modules/orders/facade";
+import { createOrder, Order } from "../modules/orders/schemas";
+import { permissionsForRoles } from "../modules/access/facade";
 
 it("enforces facade permissions even when called without HTTP", async () => {
     const orders = createOrders(createMemoryStore<Order>());

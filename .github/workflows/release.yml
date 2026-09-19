@@ -28,14 +28,14 @@ jobs:
           node-version: "24"
           package-manager-cache: false
 
-      - name: Install Yarn
-        run: npm install --global yarn@1.22.22
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
 
       - name: Validate tag and package version
         id: version
         shell: bash
         run: |
-          version="$(node -p "require('./package.json').version")"
+          version="$(node -p "require('./packages/core/package.json').version")"
           expected_tag="v${version}"
           if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
             echo "Tag '$GITHUB_REF_NAME' does not match package version '$expected_tag'." >&2
@@ -44,19 +44,24 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build
 
       - name: Check example application
-        run: yarn example:check
+        run: pnpm example:check
 
       - name: Check TypeScript
-        run: yarn typecheck
+        run: pnpm typecheck
 
       - name: Run tests
-        run: yarn test
+        run: pnpm test
 
-      - name: Build package
-        run: yarn build
+      - name: Build example applications
+        run: |
+          pnpm example:build
+          pnpm example:fullstack:build
 
   package:
     name: Build npm package
@@ -72,17 +77,17 @@ jobs:
           node-version: "24"
           package-manager-cache: false
 
-      - name: Install Yarn
-        run: npm install --global yarn@1.22.22
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Build npm tarball
         shell: bash
         run: |
           mkdir release-assets
-          npm pack --pack-destination release-assets
+          pnpm --filter @boringapi/core pack --pack-destination release-assets
 
       - name: Verify npm tarball contents
         shell: bash
@@ -141,7 +146,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.verify.outputs.version }}
         run: |
-          package_name="$(node -p "require('./package.json').name")"
+          package_name="$(node -p "require('./packages/core/package.json').name")"
           package_file="$(find release-assets -maxdepth 1 -type f -name '*.tgz' -print -quit)"
           if [[ -z "$package_file" ]]; then
             echo "The npm package artifact is missing." >&2

@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { HttpError } from "../../../../src";
+import { HttpError } from "@boringapi/core";
 import { requireAccess } from "$modules/access/facade";
 import type { Actor } from "$modules/access/schemas";
 import type { CreateOrder, Order } from "./schemas";

@@ -101,6 +101,9 @@ Runnable examples live in the repository: [basic API](https://github.com/PaDreye
 
 ## Contributing
 
+The repository uses pnpm workspaces: the published package lives in `packages/core`,
+and `examples/basic` and `examples/fullstack` are private consumer workspaces.
+
 See the [contributor guide](https://github.com/PaDreyer/boring-api/blob/master/CONTRIBUTING.md) for repository setup, tests and releases. Report bugs through [GitHub Issues](https://github.com/PaDreyer/boring-api/issues).
 
 ## License

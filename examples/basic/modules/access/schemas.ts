@@ -1,4 +1,4 @@
-import type { PermissionRule } from "../../../../src";
+import type { PermissionRule } from "@boringapi/core";
 
 /** Application-owned names and descriptions; reuse these before adding permissions. */
 export const permissions = {

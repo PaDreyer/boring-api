@@ -1,0 +1,86 @@
+{
+  "name": "@boringapi/core",
+  "version": "0.0.1",
+  "description": "Convention-driven, file-based APIs for Node.js and TypeScript",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "client": [
+        "dist/client.d.ts"
+      ],
+      "register": [
+        "dist/register.d.ts"
+      ]
+    }
+  },
+  "bin": {
+    "boring": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json",
+    "./agent-guide": "./docs/agent-guide.md",
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "require": "./dist/client.js",
+      "default": "./dist/client.js"
+    },
+    "./register": {
+      "types": "./dist/register.d.ts",
+      "require": "./dist/register.js",
+      "default": "./dist/register.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "docs",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "author": "Paul Dreyer",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PaDreyer/boring-api.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/PaDreyer/boring-api/issues"
+  },
+  "homepage": "https://github.com/PaDreyer/boring-api#readme",
+  "keywords": [
+    "api",
+    "filesystem",
+    "typescript",
+    "express",
+    "convention"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node scripts/build.js",
+    "dev": "tsc --watch --preserveWatchOutput",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test -r ts-node/register test/*.test.ts",
+    "prepare": "node scripts/build.js"
+  },
+  "dependencies": {
+    "@types/express": "^4.17.15",
+    "@types/node": "^18.11.17",
+    "express": "^4.18.2",
+    "ts-node": "^10.9.1",
+    "typescript": "^4.9.4"
+  },
+  "peerDependencies": {
+    "zod": "^3.20.2"
+  }
+}

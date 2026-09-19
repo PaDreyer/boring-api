@@ -1,4 +1,4 @@
-import { requirePermissions } from "../../../../src";
+import { requirePermissions } from "@boringapi/core";
 import type { Actor, AuthorizationRule, Permission } from "./schemas";
 
 /** Roles bundle permissions; no role receives implicit or wildcard access. */

@@ -3,21 +3,18 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { it } from "node:test";
 import { Pool } from "pg";
-import { BoringApi } from "../src";
-import { createClient, ApiError } from "../src/client";
-import { registerTypeScript } from "../src/register";
-import { analyzeProject } from "../src/core/project";
+import { BoringApi } from "@boringapi/core";
+import { createClient, ApiError } from "@boringapi/core/client";
+import { spawnSync } from "node:child_process";
 
-const repository = join(__dirname, "..");
-const application = join(repository, "examples/fullstack");
-registerTypeScript(join(application, "api"), join(repository, "tsconfig.fullstack.json"));
+const application = join(__dirname, "..");
 
 it("checks the fullstack application and prevents HTTP-free permission bypass through pages", async () => {
-    const project = analyzeProject(repository, "examples/fullstack/api", "tsconfig.fullstack.json");
-    assert.deepEqual(project.architecture.map(error => error.message), []);
-    assert.equal(project.diagnostics.length, 0);
-    const { createOrders } = await import("../examples/fullstack/modules/orders/facade");
-    const { createPages } = await import("../examples/fullstack/web/server/pages");
+    const cli = join(require.resolve("@boringapi/core/package.json"), "../dist/cli.js");
+    const checked = spawnSync(process.execPath, [cli, "check"], { cwd: application, encoding: "utf8" });
+    assert.equal(checked.status, 0, checked.stdout + checked.stderr);
+    const { createOrders } = await import("../modules/orders/facade");
+    const { createPages } = await import("../web/server/pages");
     let calls = 0;
     const orders = createOrders({ async transaction() { calls++; throw new Error("Database must not be touched"); } });
     const pages = createPages(orders);
@@ -37,9 +34,9 @@ it("persists API and page results in PostgreSQL, rolls back failed business writ
     connection.searchParams.set("options", `-csearch_path=${schema}`);
     const url = connection.toString();
     const inspect = new Pool({ connectionString: url });
-    const { createDatabase } = await import("../examples/fullstack/infra/db/database");
-    const { createOrders } = await import("../examples/fullstack/modules/orders/facade");
-    const { createPages } = await import("../examples/fullstack/web/server/pages");
+    const { createDatabase } = await import("../infra/db/database");
+    const { createOrders } = await import("../modules/orders/facade");
+    const { createPages } = await import("../web/server/pages");
     const database = createDatabase({ connectionString: url });
     const orders = createOrders(database.orders);
     const actor = { id: "test-operator", permissions: ["orders:read", "orders:create"] as const };

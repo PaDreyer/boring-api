@@ -43,28 +43,6 @@ function cli(root: string, args = ["inspect", "api", "--json"]) {
     });
 }
 
-it("locates existing order operations, schemas, permissions and inherited example hooks", () => {
-    const result = inspect(repository, "examples/basic/api");
-    assert.equal(result.schemaVersion, 1);
-    const orders = result.services.find(service => service.name === "orders")!;
-    assert.deepEqual(orders.operations.map(operation => operation.access), ["ctx.services.orders.create", "ctx.services.orders.get"]);
-    assert.ok(orders.operations.every(operation => operation.source.file === "examples/basic/modules/orders/facade.ts"));
-    const route = result.routes.find(route => route.path === "/orders" && route.method === "POST")!;
-    assert.equal(route.access.session, "required");
-    assert.equal(route.access.authorization?.kind, "literal");
-    assert.match(JSON.stringify(route.access.authorization), /orders:create/);
-    assert.match(route.input.body!.outputType, /quantity: number/);
-    assert.equal(route.hooks.errors.statuses["404"]!.file, "examples/basic/api/orders/+error.404.ts");
-    assert.equal(result.routes.find(route => route.path === "/health")!.hooks.envelope.enabled, false);
-    assert.deepEqual(result.routes.find(route => route.path === "/items/:id")!.hooks.middleware.map(source => source.file),
-        ["examples/basic/api/+middleware.ts", "examples/basic/api/items/+middleware.ts"]);
-    const readable = formatInspection(result);
-    assert.match(readable, /POST \/orders/);
-    assert.match(readable, /ctx.services.orders.get/);
-    assert.match(readable, /authorization: "orders:create"/);
-    assert.ok(!JSON.stringify(result).includes(repository));
-});
-
 it("follows aliases and re-exports without executing setup, routes, schemas or facades, and refreshes signatures", () => {
     project({
         "api/+setup.ts": 'import { makeOrders, identity } from "@orders/facade"; throw new Error("EXECUTED setup"); export async function setup() { return { sales: makeOrders(), identity }; }',

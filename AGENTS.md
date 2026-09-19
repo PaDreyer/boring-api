@@ -6,8 +6,8 @@ Boring API maps filesystem conventions to HTTP routes and cross-cutting behavior
 
 ## Where things belong
 
-- `src/core`: discovery, request pipeline, context, shared types and errors.
-- `src`: the reusable library only. Do not add application routes or a fixed server here.
+- `packages/core/src/core`: discovery, request pipeline, context, shared types and errors.
+- `packages/core/src`: the reusable library only. Do not add application routes or a fixed server here.
 - `examples/basic/api`: a separate example consumer. A route is `<URL folders>/<HTTP method>.ts` below the consumer's chosen API directory.
 - Consumer `modules/<name>/facade.ts` and `schemas.ts` are public entry points; other module files are private. Sibling `infra/` holds adapters, `web/client/` marks browser source, and `web/server/` holds server presentation adapters wired by setup.
 - Use `$modules/<name>/...` and `$infra/<path>` for imports across those directories where architecture rules permit them. Both aliases follow the selected API's sibling directories through editor, source compiler and build resolution; same-module imports can stay relative.
@@ -15,7 +15,10 @@ Boring API maps filesystem conventions to HTTP routes and cross-cutting behavior
 - `+middleware.ts`: available at any URL folder; inherited from root to leaf.
 - `+envelope.ts`, `+error.ts`, `+error.<status>.ts`: available at any URL folder; nearest definition overrides an ancestor.
 - `.boring/types`: generated `$types` modules; never edit or commit them. Route files import method-specific handlers such as `GetHandler` from `./$types`.
-- `test`: HTTP integration tests and isolated fixtures. Keep helper code outside the scanned endpoint tree.
+- `packages/core/test`: HTTP integration tests and isolated fixtures. Keep helper code outside the scanned endpoint tree.
+
+- The root is a private pnpm workspace; reusable packages live in `packages/*`, private consumers in `examples/*`. Keep each workspace's dependencies and tests local. Use `workspace:^` and public package imports across workspace boundaries. The CLI remains in Core until explicitly extracted.
+- Each example owns its `tsconfig.json`, `.boring/` and `dist/`; do not add root source aliases into library code. Root documentation is copied into Core during build/pack; edit only the root originals.
 
 ## Invariants
 
@@ -46,4 +49,4 @@ Boring API maps filesystem conventions to HTTP routes and cross-cutting behavior
 
 ## Working on the project
 
-Use the existing TypeScript, Express 4 and Zod 3 stack. Prefer a named file convention over decorators, manual router registration or per-route pipeline configuration. When changing routing, generated types or the request pipeline, add a test that catches the behavioral risk. Run `yarn example:check`, `yarn typecheck`, `yarn test`, and `yarn build` before declaring a change complete. Keep README examples aligned with the code. Avoid adding dependencies for routine framework behavior.
+Use the existing TypeScript, Express 4 and Zod 3 stack. Prefer a named file convention over decorators, manual router registration or per-route pipeline configuration. When changing routing, generated types or the request pipeline, add a test that catches the behavioral risk. Build Core first with `pnpm build`, then run `pnpm example:check`, `pnpm typecheck`, `pnpm test`, and both `pnpm example:build` and `pnpm example:fullstack:build` before declaring a change complete. Keep README examples aligned with the code. Avoid adding dependencies for routine framework behavior.

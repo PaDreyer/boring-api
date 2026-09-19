@@ -29,27 +29,46 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v7
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
-          cache: yarn
-          cache-dependency-path: yarn.lock
-
-      - name: Install Yarn
-        run: npm install --global yarn@1.22.22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build
 
       - name: Check example application
-        run: yarn example:check
+        run: pnpm example:check
 
       - name: Check TypeScript
-        run: yarn typecheck
+        run: pnpm typecheck
 
       - name: Run tests
-        run: yarn test
+        run: pnpm test
 
-      - name: Build package
-        run: yarn build
+      - name: Build basic example
+        run: pnpm example:build
+
+      - name: Build fullstack example
+        if: matrix.node-version == '24'
+        run: pnpm example:fullstack:build
+
+      - name: Verify packed core package
+        if: matrix.node-version == '24'
+        run: |
+          mkdir release-assets
+          pnpm --filter @boringapi/core pack --pack-destination release-assets
+          node scripts/check-package.js release-assets/*.tgz
+
+      - name: Verify production-only installation
+        run: |
+          pnpm install --prod --frozen-lockfile
+          pnpm --filter @boringapi/example-basic exec boring --help

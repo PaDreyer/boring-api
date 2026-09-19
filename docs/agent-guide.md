@@ -21,7 +21,10 @@ detailed contracts. This is consumer guidance, not framework contributor guidanc
 
 Direct CLI commands below assume `api/`. Pass `--dir src/api` (or the actual API
 path) and `--project <tsconfig>` when needed. Generated package scripts already
-include the API path. See [inspection](inspection.md) and [CLI configuration](cli.md).
+include the API path. In a workspace repository, run these commands in the
+consumer workspace (or select it with the package manager). Each consumer owns
+its generated `.boring/` files and configuration; build local framework packages
+before invoking their CLI. See [inspection](inspection.md) and [CLI configuration](cli.md).
 
 ## Decide where the change belongs
 

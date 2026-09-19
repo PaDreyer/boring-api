@@ -4,8 +4,9 @@ A small application with in-memory storage, typed facades and permission rules.
 Run these commands from the repository root:
 
 ```bash
-yarn install
-yarn example:dev
+pnpm install
+pnpm build
+pnpm example:dev
 ```
 
 Set `BORING_API_TOKEN` before starting to exercise protected routes. The token
@@ -25,7 +26,7 @@ curl -X POST http://localhost:4040/echo \
 The responses are `{"service":"boring-api","status":"ok"}`, `{"id":"42"}`, and `{"data":{"message":"Hello"}}`. The current scope supports JSON bodies and individual dynamic segments such as `[id]`. Catch-all segments are not defined yet.
 
 To exercise the orders module, set your own `BORING_API_TOKEN` in the shell before
-starting `yarn example:dev`. The example token hook grants the `admin` role and
+starting `pnpm example:dev`. The example token hook grants the `admin` role and
 its explicit `orders:read` and `orders:create` permissions to a matching bearer
 token; it is demonstration authentication. Use the same token in
 the client shell:

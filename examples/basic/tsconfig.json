@@ -1,0 +1,29 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    "baseUrl": ".",
+    "rootDirs": [
+      ".",
+      ".boring/types"
+    ],
+    "paths": {
+      "$modules/*": [
+        "modules/*"
+      ],
+      "$infra/*": [
+        "infra/*"
+      ],
+      "$client": [
+        ".boring/types/api/$client.d.ts"
+      ]
+    }
+  },
+  "include": [
+    "api/**/*.ts",
+    "modules/**/*.ts",
+    "infra/**/*.ts",
+    "server.ts"
+  ]
+}

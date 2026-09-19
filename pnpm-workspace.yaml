@@ -1,0 +1,10 @@
+packages:
+  - packages/*
+  - examples/*
+
+# Core's Zod peer is also needed by prepare during production-only installs.
+autoInstallPeers: true
+
+# Keep the existing TypeScript 4.9-compatible declaration dependency.
+overrides:
+  '@types/pg>pg-protocol': 1.7.1

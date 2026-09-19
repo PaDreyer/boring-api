@@ -6,7 +6,7 @@ independent of that driver. Run the commands below from the repository root.
 
 ## Run
 
-Use Node 22.12+ for the Vite tooling and install with `yarn install`. Configure
+Use Node 22.12+ for the Vite tooling and install with `pnpm install`. Configure
 `DATABASE_URL` for a database you own and `BORING_API_TOKEN` for the demo bearer
 provider through your local environment. No credentials are included here.
 The repository pins the PostgreSQL declaration package and its declaration-only
@@ -14,16 +14,21 @@ protocol dependency for TypeScript 4.9. The runtime driver uses its current
 protocol dependency; no runtime downgrade is required.
 
 ```bash
-yarn example:fullstack:sync
-yarn example:fullstack:check
-yarn example:fullstack:migrate
-yarn example:fullstack:dev
+pnpm build
+pnpm example:fullstack:sync
+pnpm example:fullstack:check
+pnpm example:fullstack:migrate
+pnpm example:fullstack:dev
 ```
 
-In another terminal run `yarn example:fullstack:web`, open
+In another terminal run `pnpm example:fullstack:web`, open
 http://localhost:5173 and enter your configured demo token. The SPA creates an
 order and reads it back with the generated client. It keeps the token only in
 component memory. The Vite proxy forwards `/orders` and `/pages` to port 4041.
+
+Vite prebundles the linked `@boringapi/core/client` workspace export for browser
+use. After rebuilding Core, restart Vite with `pnpm example:fullstack:web --force`
+to refresh that dependency cache.
 
 ```bash
 curl -H "Authorization: Bearer $BORING_API_TOKEN" \
@@ -43,9 +48,9 @@ browser login or cookie session; use your authentication provider/proxy for that
 ## Build and deploy
 
 ```bash
-yarn build
-yarn example:fullstack:build
-yarn example:fullstack:start
+pnpm build
+pnpm example:fullstack:build
+pnpm example:fullstack:start
 ```
 
 The combined server serves the SPA at http://localhost:4041 and the API/MPA at
@@ -53,17 +58,18 @@ their existing paths. `PORT` changes this port; `WEB_DIST` can select relocated
 static assets. Keep the compiled server output and generated static assets
 together. Apply migrations explicitly before starting, including in deployment.
 The build contains the SQL migration list, so migrations can also run with
-`node .boring/fullstack-build/examples/fullstack/migrate.js` after compilation.
+`node examples/fullstack/dist/migrate.js` after compilation.
 `boring start` starts only the API; use this example's server for combined static
 hosting. The sample has no client-side URL router or HTML fallback hiding API 404s.
 
 For a standalone consumer, put `@boringapi/core`, `zod`, `pg`, `react` and
 `react-dom` in dependencies, and Vite plus the corresponding `@types` packages
-in devDependencies. Use package imports instead of this repository's relative
-library imports. Extend `.boring/tsconfig.json`, enable `jsx: "react-jsx"`, and
-map Vite's `$modules` alias to this application's modules directory. The browser
-subpath resolves directly from the installed package, so its repository-specific
-Vite alias is unnecessary.
+in devDependencies, as this workspace already does. Replace `workspace:^` with
+a published Core version when copying it outside the repository. Its tsconfig
+currently extends the repository compiler defaults; replace that extension with
+standalone compiler options (or extend `.boring/tsconfig.json`), enable
+`jsx: "react-jsx"`, and map Vite's `$modules` alias to the modules directory.
+The browser subpath resolves directly from the package.
 Import the generated route contract with `import type { ApiRoutes } from "$client"`.
 The generated TypeScript configuration supplies this alias; Vite needs no alias
 for it because type imports are erased. When adding your own TypeScript `paths`,
@@ -93,7 +99,7 @@ runs directly with Node; the build has rewritten its aliases to relative paths.
 
 The normal suite checks the client, generated types, page import boundaries and
 permissions without a database. To also run the real PostgreSQL integration test,
-set `BORING_TEST_DATABASE_URL` to an isolated database and run `yarn test`. The test
+set `BORING_TEST_DATABASE_URL` to an isolated database and run `pnpm test`. The test
 creates and removes a random schema, never the application's existing tables.
 It covers migration locking/checksums, persistence after reopening connections,
 transaction rollback, API/MPA reads, HTML escaping, validation and authentication.
@@ -104,7 +110,7 @@ Example local test instance (temporary, bound to localhost, no stored password):
 docker run --rm -d --name boring-api-tests \
   -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:55432:5432 postgres:17-alpine
 # Wait until: docker exec boring-api-tests pg_isready -U postgres
-BORING_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/postgres yarn test
+BORING_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/postgres pnpm test
 docker stop boring-api-tests
 ```
 

@@ -5,8 +5,7 @@ application. The repository [AGENTS.md](../../AGENTS.md) also applies. This is o
 consumer with one PostgreSQL database, React SPA and server-rendered order pages.
 The specifics below supplement the shared workflow.
 
-- Inspect with `yarn ts-node src/cli.ts inspect examples/fullstack/api --project
-  tsconfig.fullstack.json` before adding functionality. Reuse `orders.create` and
+- Build Core with `pnpm build`, then inspect with `pnpm example:fullstack:inspect` before adding functionality. Reuse `orders.create` and
   `orders.get`; do not add another orders service, database pool or request helper.
 - Keep the PostgreSQL schema in `infra/db/migrations.ts`. Append migrations;
   never edit applied SQL. Parameterize SQL and validate rows with shared schemas.
@@ -26,4 +25,4 @@ The specifics below supplement the shared workflow.
   environment-controlled bearer-token provider is a demo, not production login.
 - Run the fullstack check/build scripts and repository checks. Set
   `BORING_TEST_DATABASE_URL` to an isolated test database to include the real
-  PostgreSQL test in `yarn test`; it creates and removes its own random schema.
+  PostgreSQL test in `pnpm test`; it creates and removes its own random schema.

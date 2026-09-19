@@ -24,9 +24,21 @@ layers. No tool depends on CLI. Type generation and source scaffolding are
 separate because analysis needs generated types while scaffolding needs analysis.
 
 Every package exposes `/package.json` for tooling that needs package metadata.
-Internal source files and compiled subpaths are not public APIs. The packages
-currently share a release version, including the CLI version recommended by
-`initializeProject`.
+Internal source files and compiled subpaths are not public APIs.
+
+## Releases and compatibility
+
+All packages share a platform release version, including unchanged packages and
+the CLI version recommended by `initializeProject`. They are tested together and
+remain independently installable. During `0.x`, patch releases within a minor line
+remain compatible; minor releases may require application changes. From `1.0.0`,
+incompatible public changes require a new platform major version.
+
+Published package dependencies use caret ranges. For example, `^0.1.0` permits
+stable versions `>=0.1.0 <0.2.0`, so compatible installed versions can differ even
+though releases share a version. See the
+[platform versioning and release policy](https://github.com/PaDreyer/boring-api/blob/master/CONTRIBUTING.md#publishing)
+for the complete rules.
 
 ## Use tools without the CLI
 

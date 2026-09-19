@@ -114,13 +114,48 @@ and before publishing.
 
 ## Publishing
 
-All publishable packages currently share one release version and use `v<version>`
-tags. The private root and examples have no release versions. The workflow checks
-every package manifest against the tag, builds all packages, packs and tests those
-exact artifacts, then publishes in dependency order. The GitHub Release includes
-all tarballs and their checksums. Package discovery, packing and release planning
-share `scripts/workspaces.js`; new workspace packages do not need an extra list
-in GitHub Actions.
+Boring API releases as one platform composed of independently installable packages.
+Every release gives all publishable packages the same new version, including
+packages whose implementation has not changed. One `v<version>` tag identifies
+the complete platform release. The private root and examples are not published
+and have no release versions.
+
+### Versioning policy
+
+Choose one version increment for the whole platform based on the most significant
+public change across its packages. Public contracts include runtime and tooling
+APIs, CLI behavior, filesystem conventions and generated types and client contracts.
+
+| Release line | Change | Version increment |
+| --- | --- | --- |
+| `0.x` | Compatible corrections to code, documentation or builds | Patch, for example `0.1.0` to `0.1.1` |
+| `0.x` | Public additions, deprecations or incompatible changes | Minor, for example `0.1.3` to `0.2.0` |
+| `1.0.0` and later | Compatible corrections to code, documentation or builds | Patch |
+| `1.0.0` and later | Compatible public functionality or deprecation | Minor |
+| `1.0.0` and later | Incompatible public change | Major |
+
+The `0.x` rules are Boring API's compatibility commitment during initial development;
+[Semantic Versioning](https://semver.org/) itself does not promise API stability
+before `1.0.0`. Patch releases within a `0.x` minor line must remain compatible.
+After `1.0.0`, follow the standard SemVer rules. Reset lower version components
+when incrementing a minor or major version.
+
+Keep internal dependency declarations as `workspace:^`. Packing replaces them
+with ordinary caret ranges: `workspace:^` against version `0.1.0` becomes
+`^0.1.0`, allowing stable versions `>=0.1.0 <0.2.0`. A shared release version
+therefore permits compatible installed versions to differ; it does not pin every
+dependency to an identical version. Package boundaries and direct dependencies
+remain independent of the shared release schedule.
+
+### Release workflow
+
+The workflow checks every package manifest against the tag, builds all packages,
+packs and tests those exact artifacts, then publishes in dependency order. The
+GitHub Release includes all tarballs and their checksums. Package discovery,
+packing and release planning share `scripts/workspaces.js`; new workspace packages
+do not need an extra list in GitHub Actions. `scripts/release-plan.js` enforces the
+shared version and matching tag; maintainers assess compatibility and choose the
+appropriate version increment using the policy above.
 
 Update every package to the next common version, refresh the lockfile and run the
 checks above. Commit the version changes with the implementation, then create and

@@ -21,6 +21,10 @@ reserves `boring-start.cjs` and `.boring-build.json`; avoid source files or dire
 that emit to those paths and keep output separate from `.boring/build.json`.
 See [deployment](cli.md) and [package responsibilities and APIs](packages.md).
 
+Runtime and tooling packages share a platform release version. Follow the
+[release and compatibility policy](packages.md#releases-and-compatibility) when
+updating them.
+
 ## Start with the existing application
 
 1. Read the project's `AGENTS.md`, `package.json`, TypeScript configuration and

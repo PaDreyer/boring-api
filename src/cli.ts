@@ -74,8 +74,9 @@ function projectRoot(from: string): string {
     }
 }
 
-function sync(root: string, apiDirectory: string): void {
-    const result = generateTypes(root, apiDirectory);
+function sync(root: string, apiDirectory: string, projectFile?: string): void {
+    const result = existsSync(join(dirname(resolve(root, apiDirectory)), "web", "client"))
+        ? analyzeProject(root, apiDirectory, projectFile) : generateTypes(root, apiDirectory);
     console.info(`Generated ${result.files.length} type file${result.files.length === 1 ? "" : "s"}.`);
 }
 
@@ -107,7 +108,7 @@ async function serve(root: string, apiDirectory: string, port: number): Promise<
 
 function watchDirectories(directory: string, onChange: () => void): () => void {
     const parent = dirname(directory);
-    const names = new Set([basename(directory), "modules", "infra"]);
+    const names = new Set([basename(directory), "modules", "infra", "web"]);
     let watchers: FSWatcher[] = [];
     let timer: NodeJS.Timeout | undefined;
     let stopped = false;
@@ -154,7 +155,7 @@ function watchDirectories(directory: string, onChange: () => void): () => void {
 
 async function dev(root: string, apiDirectory: string, port: number, projectFile?: string): Promise<void> {
     const api = resolve(root, apiDirectory);
-    sync(root, apiDirectory);
+    sync(root, apiDirectory, projectFile);
     let child: ChildProcess | undefined;
     let timer: NodeJS.Timeout | undefined;
     let restartRequested = false;
@@ -181,7 +182,7 @@ async function dev(root: string, apiDirectory: string, port: number, projectFile
         if (timer) clearTimeout(timer);
         timer = setTimeout(() => {
             try {
-                sync(root, apiDirectory);
+                sync(root, apiDirectory, projectFile);
                 if (child && child.exitCode === null) {
                     restartRequested = true;
                     if (!child.killed) child.kill("SIGTERM");
@@ -264,7 +265,7 @@ async function main(): Promise<void> {
     const args = parseArguments(argv);
     const root = projectRoot(process.cwd());
     switch (args.command) {
-        case "sync": sync(root, args.apiDirectory); break;
+        case "sync": sync(root, args.apiDirectory, args.projectFile); break;
         case "check":
         case "inspect":
         case "build": process.exitCode = check(root, args); break;

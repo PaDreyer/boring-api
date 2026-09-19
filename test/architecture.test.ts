@@ -215,6 +215,26 @@ it("keeps browser code and shared schemas independent of local server code and N
     });
 });
 
+it("checks unused server pages and only permits setup to wire their presentation adapters", () => {
+    project({
+        ...sdk,
+        "api/+setup.ts": 'import { createPages } from "../web/server/pages"; export const setup = () => ({ pages: createPages() });',
+        "modules/orders/facade.ts": 'export const get = () => "order";',
+        "modules/orders/schemas.ts": 'export type Order = string;',
+        "web/server/pages.ts": 'import { get } from "../../modules/orders/facade"; export const createPages = () => ({ order: get });',
+        "web/server/unused.ts": 'import { query } from "database-sdk"; export const leak = query;',
+        "web/server/storage.ts": 'import { db } from "../../infra/db"; export const leak = db;',
+        "infra/db.ts": 'export const db = {};',
+        "modules/backwards/facade.ts": 'export { createPages } from "../../web/server/pages";',
+        "web/client/server.ts": 'export { createPages } from "../server/pages";',
+    }, root => {
+        const { diagnostics } = inspect(root);
+        assert.equal(diagnostics.filter(diagnostic => diagnostic.code === "BORING109").length, 3);
+        assert.equal(diagnostics.filter(diagnostic => diagnostic.code === "BORING105").length, 1);
+        assert.equal(diagnostics.length, 4);
+    });
+});
+
 it("rejects computed imports, aliased loaders, unresolved JS requires and custom loaders", () => {
     project({
         "modules/orders/facade.ts": [

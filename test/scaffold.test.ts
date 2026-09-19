@@ -184,12 +184,15 @@ it("requires compatible explicit templates and creates a typed 501 adapter when 
 
 it("rolls back a new adapter if it invalidates an existing typed envelope", () => {
     const root = fixture();
+    write(root, "web/client/api.ts", 'import type { ApiRoutes } from "../../api/$client"; export type Routes = ApiRoutes;');
     write(root, "api/+envelope.ts", 'import type { EnvelopeContext } from "./$types"; export const handler = (ctx: EnvelopeContext) => ctx.payload.status;');
     checked(root);
     const before = readFileSync(join(root, "api/+envelope.ts"), "utf8");
+    const client = readFileSync(join(root, ".boring/types/api/$client.d.ts"), "utf8");
     assert.throws(() => addEndpoint(root, "api", "invoices/get"), /check diagnostics/);
     assert.equal(existsSync(join(root, "api/invoices")), false);
     assert.equal(readFileSync(join(root, "api/+envelope.ts"), "utf8"), before);
+    assert.equal(readFileSync(join(root, ".boring/types/api/$client.d.ts"), "utf8"), client);
     checked(root);
 });
 

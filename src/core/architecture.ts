@@ -1,11 +1,11 @@
 import { realpathSync } from "fs";
 import { builtinModules } from "module";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import ts from "typescript";
 import { serviceSources } from "./symbols";
 
 export interface ArchitectureDiagnostic {
-    code: "BORING101" | "BORING102" | "BORING103" | "BORING104" | "BORING105" | "BORING106" | "BORING107";
+    code: "BORING101" | "BORING102" | "BORING103" | "BORING104" | "BORING105" | "BORING106" | "BORING107" | "BORING109";
     file: ts.SourceFile;
     start: number;
     length: number;
@@ -13,7 +13,7 @@ export interface ArchitectureDiagnostic {
 }
 
 type Area = {
-    kind: "api" | "module" | "infra" | "browser" | "generated" | "framework" | "package" | "builtin" | "other";
+    kind: "api" | "module" | "infra" | "browser" | "pages" | "generated" | "client" | "framework" | "package" | "builtin" | "other";
     module?: string;
     entry?: "facade" | "schemas";
     name?: string;
@@ -49,6 +49,7 @@ function roots(apiDirectory: string) {
         modules: canonical(join(parent, "modules")),
         infra: canonical(join(parent, "infra")),
         browser: canonical(join(parent, "web", "client")),
+        pages: canonical(join(parent, "web", "server")),
     };
 }
 
@@ -65,6 +66,7 @@ export function checkArchitecture(program: ts.Program, apiDirectory: string, gen
     const directories = roots(apiDirectory);
     const generated = canonical(generatedRoot);
     const frameworkEntries = new Set(["index.ts", "index.js", "index.d.ts"].map(name => canonical(join(__dirname, "..", name))));
+    const clientEntries = new Set(["client.ts", "client.js", "client.d.ts"].map(name => canonical(join(__dirname, "..", name))));
     const checker = program.getTypeChecker();
     const cache = ts.createModuleResolutionCache(dirname(directories.api), file => file, program.getCompilerOptions());
     const diagnostics: ArchitectureDiagnostic[] = [];
@@ -73,10 +75,12 @@ export function checkArchitecture(program: ts.Program, apiDirectory: string, gen
 
     function area(file: string): Area {
         const target = canonical(file);
+        if (clientEntries.has(target)) return { kind: "client" };
         if (inside(generated, target)) return { kind: "generated" };
         if (inside(directories.api, target)) return { kind: "api" };
         if (inside(directories.infra, target)) return { kind: "infra" };
         if (inside(directories.browser, target)) return { kind: "browser" };
+        if (inside(directories.pages, target)) return { kind: "pages" };
         if (inside(directories.modules, target)) {
             const parts = relative(directories.modules, target).split(sep);
             const entry = parts.length === 2 && /^(facade|schemas)\.(?:d\.)?[cm]?[jt]sx?$/.exec(parts[1]);
@@ -173,7 +177,7 @@ export function checkArchitecture(program: ts.Program, apiDirectory: string, gen
     // Program. Parse those sources too, so CommonJS barrels cannot hide edges.
     for (const edges of dependencies.values()) {
         for (const edge of edges) {
-            if (!edge.target || !["api", "module", "infra", "browser", "other"].includes(edge.area.kind)) continue;
+            if (!edge.target || !["api", "module", "infra", "browser", "pages", "other"].includes(edge.area.kind)) continue;
             if (dependencies.has(edge.target)) continue;
             let source = sources.get(edge.target);
             if (!source) {
@@ -221,14 +225,23 @@ export function checkArchitecture(program: ts.Program, apiDirectory: string, gen
             } else if (from.kind === "browser" || (from.kind === "module" && from.entry === "schemas")) {
                 const local = from.kind === "browser" && to.kind === "browser";
                 const schema = to.kind === "module" && to.entry === "schemas";
+                const client = from.kind === "browser" && (to.kind === "client" ||
+                    to.kind === "package" && to.name === "@boringapi/core" && edge.specifier === "@boringapi/core/client" ||
+                    to.kind === "generated" && edge.typeOnly && edge.target !== undefined && basename(edge.target) === "$client.d.ts");
                 const external = to.kind === "package" && (from.kind === "browser" ? (!framework || edge.typeOnly) : zod);
-                if (!(local || schema || external || (framework && edge.typeOnly))) {
+                if (!(local || schema || external || client || (framework && edge.typeOnly))) {
                     fail("BORING105", `Browser code and shared schemas cannot import server code: '${edge.specifier}'. Share data through schemas.ts; use import type for framework-only types.`);
                 }
             } else if (endpoint) {
                 if (!(framework || zod || (to.kind === "module" && to.entry === "schemas") || (to.kind === "generated" && edge.typeOnly))) {
                     fail("BORING101", `Endpoints import only public schemas, generated types, @boringapi/core and zod. Move '${edge.specifier}' behind a facade exposed through ctx.services.${servicesHint}`);
                 }
+            } else if (from.kind === "pages") {
+                if (!(to.kind === "pages" || to.kind === "module" && !!to.entry || framework || zod)) {
+                    fail("BORING109", "Server pages use public facades and schemas. Initialize infrastructure in +setup and inject the existing business operations.");
+                }
+            } else if (to.kind === "pages" && !setup) {
+                fail("BORING109", "Server pages are presentation adapters. Only +setup wires them; business modules and infrastructure must not depend on pages.");
             } else if (from.kind === "api" && !setup && (to.kind === "infra" || (to.kind === "package" && !framework && !zod))) {
                 fail("BORING101", "Initialize infrastructure and SDKs in +setup.ts and expose the required behavior through a facade.");
             } else if (from.kind === "infra" && to.kind === "module" && to.entry === "facade" && !edge.typeOnly) {

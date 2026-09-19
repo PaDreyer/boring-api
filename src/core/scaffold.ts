@@ -169,7 +169,7 @@ export function addModule(projectRoot: string, apiDirectory: string, name: strin
         throw new Error(`Module '${name}' already exists. Extend ${slash(relative(root, target))}/facade.ts and schemas.ts.${exports ? ` Public exports: ${exports}.` : ""}`);
     }
     const changes = Object.entries(moduleTemplate(name)).map(([file, content]) => ({ file: join(target, file), content }));
-    const files = writeChanges(root, changes, () => { checked(root, api, projectFile, true); }, () => { generateTypes(root, api); });
+    const files = writeChanges(root, changes, () => { checked(root, api, projectFile, true); }, () => { analyzeProject(root, api, projectFile); });
     return { files, notes: [
         `Inspected existing modules: ${catalog.modules.map(module => module.name).join(", ") || "none"}.`,
         `Implement ${factoryName(name)} with the needed business operations and schemas, then wire it in ${slash(relative(root, api))}/+setup.ts.`,
@@ -242,7 +242,7 @@ export function addEndpoint(projectRoot: string, apiDirectory: string, name: str
         template = candidates[0];
     }
     const content = template ? relocateAdapter(project, template, target) : endpointTemplate(endpoint.method);
-    const files = writeChanges(root, [{ file: target, content }], () => { checked(root, api, projectFile, true); }, () => { generateTypes(root, api); });
+    const files = writeChanges(root, [{ file: target, content }], () => { checked(root, api, projectFile, true); }, () => { analyzeProject(root, api, projectFile); });
     return { files, notes: [
         `Inspected existing operations: ${catalog.services.flatMap(service => service.operations.map(operation => operation.access)).join(", ") || "none"}.`,
         template ? `Reused ${routeName(template)}: the same schemas, access declarations and service calls, with matching inherited hooks. Review the new URL's intended behavior.` :

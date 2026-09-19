@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": ".boring/fullstack-build",
+    "jsx": "react-jsx",
+    "paths": {
+      "@boringapi/core": ["src/index.ts"],
+      "@boringapi/core/client": ["src/client.ts"],
+      "$modules/*": ["examples/fullstack/modules/*"]
+    }
+  },
+  "include": ["examples/fullstack/**/*.ts", "examples/fullstack/**/*.tsx"]
+}

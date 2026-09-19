@@ -143,11 +143,14 @@ it("serves the health contract", async () => {
    are mandatory; fix diagnostics instead of bypassing them. Add tests for new
    behavior, validation and permission boundaries. After checkout run \`npm run sync\`.
 
-\`npm run dev\` watches the API and sibling modules and infrastructure. Use
+\`npm run dev\` watches the API and sibling modules, infrastructure and web source. Use
 \`boring build\` via the build script for production; plain tsc does not rewrite
 \`$modules\`. Browser source belongs in \`web/client/\` beside the API and imports
-only browser-safe schemas, never server implementations. Keep module dependencies
-acyclic. Add real integrations behind infrastructure; never embed credentials.
+only browser-safe schemas, never server implementations. Use \`@boringapi/core/client\`
+with type-only \`ApiRoutes\` from the API's generated \`$client\` for requests.
+Server presentation belongs in \`web/server/\`, takes injected facades and never
+imports storage. Keep module dependencies acyclic. Add real integrations behind
+infrastructure; never embed credentials. Keep generated web assets in build output.
 `,
         "README.md": `# Boring API application
 
@@ -173,7 +176,7 @@ To reuse health at another URL, run
 \`boring add endpoint health/live/get${argument} --from health/get\`.
 Generators preserve existing files; inspect the generated diff and effective hooks.
 
-\`npm run dev\` restarts on changes to \`${api}\`, \`${modules}\` and \`${infra}\`.
+\`npm run dev\` restarts on changes to \`${api}\`, \`${modules}\`, \`${infra}\` and sibling web source.
 Use \`npm run build\` followed by \`npm start\` for compiled execution. The build
 rewrites \`$modules\` imports and checks types, conventions and architecture first.
 See AGENTS.md for the ownership and reuse rules.

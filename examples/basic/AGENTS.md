@@ -62,7 +62,10 @@ requires, aliases and re-exports are checked; computed paths and custom loaders
 are errors. Fix diagnostics at their source instead of bypassing the checker.
 
 If browser source is added, put it under `web/client/`. It can import public
-schemas, but cannot import local server code, Node builtins or runtime Boring API.
+schemas, `@boringapi/core/client` and type-only generated `$client` contracts,
+but cannot import local server code, Node builtins or the runtime core server entry.
+Server presentation belongs in `web/server/` and receives existing facades from
+setup; it must not import storage. See `examples/fullstack` for a complete reference.
 Schemas themselves stay independent of server implementations. These checks
 cover imports, not values passed through `ctx.services` or arbitrary JavaScript
 side effects; keep the documented ownership of storage and business operations.

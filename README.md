@@ -57,7 +57,7 @@ boring build src/api
 boring start --port 3000
 ```
 
-`boring dev` loads TypeScript through `ts-node` and the Boring API import transformer, generates types before every restart, and watches the API directory and its sibling `modules` and `infra` directories, including directories added during development. For example, `boring dev src/api` watches `src/api`, `src/modules` and `src/infra`. Files elsewhere are not watched. `boring check` checks TypeScript, file conventions, route/hook export contracts, and application import boundaries. Architecture checks are mandatory. `boring start` loads compiled JavaScript. `boring sync` generates types and the editor configuration. Use `--project path/to/tsconfig.json` with `dev`, `check`, `inspect` or `build` to select another TypeScript configuration.
+`boring dev` loads TypeScript through `ts-node` and the Boring API import transformer, generates types before every restart, and watches the API directory and its sibling `modules`, `infra` and `web` directories, including directories added during development. For example, `boring dev src/api` watches `src/api`, `src/modules`, `src/infra` and `src/web`. Files elsewhere are not watched; keep generated web assets in the build output. `boring check` checks TypeScript, file conventions, route/hook export contracts, and application import boundaries. Architecture checks are mandatory. `boring start` loads compiled JavaScript. `boring sync` generates types and the editor configuration. Use `--project path/to/tsconfig.json` with `dev`, `sync`, `check`, `inspect` or `build` to select another TypeScript configuration.
 
 Add these scripts to the `package.json` of an application that uses Boring API:
 
@@ -111,7 +111,7 @@ test, a README and consumer `AGENTS.md`. Package scripts cover dev, sync, inspec
 check, build, test and start. The TypeScript configuration extends the generated
 `.boring/tsconfig.json` for `$modules` and `./$types`; `.boring`, dependencies and
 build output are ignored by Git. Run the sync script after a fresh checkout.
-Dev watches the API and its sibling modules and infrastructure.
+Dev watches the API and its sibling modules, infrastructure and web source.
 
 `init` does not install packages or configure authentication/storage. It creates
 missing dependency entries and scripts in an existing package.json while preserving
@@ -490,25 +490,149 @@ Storage contains domain records shared by this application's requests. Actors,
 sessions and other request state stay in each call. The example creates fresh
 storage for each `createApp()` call; it never places records or actors in module
 globals. Its in-memory adapter loses data on restart and is not a production
-database integration.
+database integration. For persistent storage and web interfaces, see the complete
+`examples/fullstack` reference described below.
+
+### PostgreSQL, SPA and server-rendered pages
+
+The reference path in `examples/fullstack` uses PostgreSQL with `pg`, a React SPA
+with Vite, and HTML pages served through ordinary Boring API routes. The library
+does not install a database driver or UI framework into every application.
+
+```text
+api/+setup.ts                         initialize adapters and wire facades/pages
+api/orders/post.ts                    create through the orders facade
+api/orders/[id]/get.ts                read through the same facade
+api/pages/orders/[id]/get.ts          return rendered HTML, envelope = false
+modules/orders/facade.ts             operations, permissions, transactions
+modules/orders/schemas.ts            shared Zod contracts
+infra/db/database.ts                 one PostgreSQL connection pool and adapter
+infra/db/migrations.ts               the database schema's migration history
+web/client/api.ts                    one typed API client
+web/client/main.tsx                  React SPA
+web/server/pages.ts                  HTML rendering using the injected facade
+```
+
+The orders facade owns its transaction: order and audit event either both commit
+or both roll back. The adapter uses one checked-out connection for the whole
+transaction, parameterized SQL and Zod validation of returned rows. This follows
+the [node-postgres transaction contract](https://node-postgres.com/features/transactions).
+Migration SQL lives in one append-only list; a database lock serializes migration
+runs, and stored checksums reject edits to already applied migrations. Run
+migrations explicitly before starting an application. External SDKs follow the
+same infrastructure boundary: initialize them in setup and inject their narrow
+interfaces into the existing business module.
+
+The SPA reuses the public schemas for form validation and makes all requests
+through one `createClient` instance. The MPA page calls the same `orders.get`
+operation directly. It validates input, passes an explicit actor and escapes
+HTML. Facade permission checks still apply when the caller is outside HTTP.
+The page's route uses the ordinary authentication/error pipeline, returns HTML
+with `ctx.response.type("html")`, and declares `envelope = false`.
+
+Run the bundled reference from this repository with Node 22.12+ and an available
+PostgreSQL database. The newer Node requirement belongs to the Vite development
+tooling; the published core package retains its Node 18+ requirement.
+
+```bash
+# Set DATABASE_URL and BORING_API_TOKEN through your local environment.
+yarn example:fullstack:sync
+yarn example:fullstack:check
+yarn example:fullstack:migrate
+yarn example:fullstack:dev     # API and HTML routes on localhost:4041
+# In another terminal:
+yarn example:fullstack:web     # SPA on localhost:5173; proxies requests to the API
+
+# Production-style build and combined server:
+yarn build
+yarn example:fullstack:build
+yarn example:fullstack:start
+```
+
+Enter the configured demo token in the SPA; it stays in memory. The bearer-token
+identity provider is demonstration code, not a login/session implementation.
+MPA requests need the same Authorization header (for example via `curl` or your
+authentication proxy). Replace this provider for a real application. See
+[`examples/fullstack/README.md`](examples/fullstack/README.md) for the complete
+workflow, HTTP examples and database test instructions.
+
+### Generated browser contracts
+
+When a sibling `web/client` directory exists, `boring sync`, `check`, `inspect`,
+`dev` and `build` also generate a virtual `$client.d.ts` at the API root. Like
+`$types`, it is stored under `.boring/types` and is never edited or committed.
+Use the consumer's generated editor configuration so the virtual import resolves:
+
+```ts
+// web/client/api.ts
+import { createClient } from "@boringapi/core/client";
+import type { ApiRoutes } from "../../api/$client";
+
+export const api = createClient<ApiRoutes>("/api"); // mount prefix, or ""
+const created = await api.request("POST /orders", {
+    body: { item: "Notebook", quantity: 2 },
+});
+const found = await api.request("GET /orders/:id", { params: { id: created.id } });
+```
+
+Endpoint keys come from HTTP methods and filesystem paths. Inputs use the Zod
+schema's input types; responses use its output types and the effective envelope's
+return type. Contracts contain expanded data types and no server imports.
+Unsupported/recursive types, handlers without output schemas and imperative
+payload writes may produce `unknown`; use explicit JSON contracts and return
+values for useful client types. Types describe declared successful responses;
+early `ctx.send()` responses that bypass output validation are not modeled.
+Dates in responses become strings. Undefined array and tuple slots in responses
+become `null`; undefined object fields are omitted. A top-level `null` payload is
+sent by Express as an empty body and becomes `undefined` in the client. JSON input
+arrays and tuples exclude `undefined` slots because serialization would change
+them to `null`; use `null` explicitly only when the input schema accepts it.
+Native Date inputs cannot cross JSON; accept an ISO string and transform it on the
+server. An envelope that may return `undefined` produces `unknown`: that branch
+keeps the current payload, including any imperative changes made by the hook.
+Overloaded envelope handlers also produce `unknown`; a single return contract is
+needed for a concrete client type. Without an output schema, the client response
+stays `unknown` even with an envelope, because an empty handler can finish with
+204 before the envelope runs.
+
+The transport encodes URL parameters, supports flat scalar/nonempty-array query fields,
+serializes JSON bodies, preserves response envelopes and returns `undefined` for
+HEAD/204. Query arrays use bracket keys (`tag[]=one&tag[]=two`) so Express preserves
+single-element arrays, including `[""]`. Empty query arrays have no supported wire
+representation: generated contracts reject them and the transport throws before
+fetching. For optional filters, explicitly omit the field or pass `undefined`;
+`[]` is never silently treated as omission. Query objects do not support nested
+values or null/undefined array elements. Responses with a `text/*` content type
+return text (including numeric-looking text); JSON responses are decoded as JSON.
+Media-type parameters such as `charset=utf-8` are supported.
+Client types do not perform runtime response validation. Use public Zod schemas
+when the browser needs to validate an external or independently deployed API.
+
+`ApiError` exposes the HTTP `status`, original `payload` and the default error
+message when available. Custom error payloads are preserved; network and abort
+errors propagate. Pass request options as the third argument for `signal` or
+headers. Configure changing authorization through `headers: () => ...` on the
+client; credentials default to `same-origin`. The `@boringapi/core/client` entry
+point has no Express or Node dependencies and can be bundled independently.
 
 ### Checked import boundaries
 
 `boring check` enforces these rules for every application. There is no disabling
 flag or compatibility mode. In addition to the consumer's `tsconfig.json` files,
 the command includes all TypeScript/JavaScript source in the selected API
-directory and its sibling `modules`, `infra` and `web/client` directories. Unused
+directory and its sibling `modules`, `infra`, `web/client` and `web/server` directories. Unused
 modules are checked too. It does not execute setup, hooks, routes or dependencies.
 
 | Source | Allowed dependencies |
 | --- | --- |
 | Method files such as `get.ts` | Public `schemas` modules, type-only generated `$types`, `@boringapi/core` and `zod`. Call business operations through `ctx.services`. Other packages and Node builtins belong behind a facade. |
 | Hooks other than `+setup` | Public facades/schemas, Boring API, Zod and Node helpers. Initialize SDKs and infrastructure in `+setup` and expose them through facades. |
-| Root `+setup` | Public facades/schemas, infrastructure, packages and Node builtins. |
+| Root `+setup` | Public facades/schemas, infrastructure, server page adapters, packages and Node builtins. |
 | A module's facade or private implementation | Its own files, other modules' public facades/schemas, infrastructure, packages and Node builtins. |
 | Public `schemas` | Other public schemas, Zod and type-only Boring API imports. Keep runtime server code out of shared contracts. |
 | Infrastructure | Other infrastructure, public schemas, packages and Node builtins. Type-only facade imports may describe an adapter contract; infrastructure must not call business facades. |
-| Browser source in `web/client` | Other browser files, public schemas and browser-appropriate packages. No local server modules, Node builtins or runtime Boring API imports. |
+| Browser source in `web/client` | Other browser files, public schemas, browser-appropriate packages, `@boringapi/core/client` and type-only generated `$client`. No local server modules, Node builtins or runtime imports from the core server entry point. |
+| Server pages in `web/server` | Other server page files, public facades/schemas, Boring API and Zod. Setup injects existing facades. No infrastructure or SDK imports; modules and infrastructure cannot import pages. |
 
 Routes and hooks are entry points: application files must not import them.
 Other modules cannot access a module's private files, including via a TypeScript
@@ -541,6 +665,7 @@ Diagnostics have stable codes and source locations:
 | `BORING106` | Unresolved dependency or unsupported module loader/path. |
 | `BORING107` | Dependency outside the application structure or misplaced module file. |
 | `BORING108` | Invalid `$modules` path or an editor alias mapping that differs from the application convention. |
+| `BORING109` | Server page imports infrastructure/SDKs, or server code outside setup imports pages. |
 
 For endpoint violations, diagnostics also list callable operations inferred from
 `+setup` when available, such as `ctx.services.orders.get`, with their declaration
@@ -549,12 +674,14 @@ locations. No additional service registry or metadata class is required.
 These are static import rules, not a JavaScript sandbox or a semantic duplicate
 detector. They do not track values passed through `ctx.services`, global I/O calls
 or the runtime behavior of installed packages. Keep infrastructure private to
-facades and select browser-compatible dependencies for browser builds. No SPA/MPA
-framework is selected by the `web/client` boundary.
+facades and select browser-compatible dependencies for browser builds. The
+reference uses React, but the browser transport and import boundaries are
+independent of the UI framework.
 
 Run `boring check` in development and CI. Startup still validates API structure
-and runtime hook contracts; `dev`, `start`, `sync` and `createApp` do not run the
-static architecture analysis. `boring inspect` uses the same mandatory checks
+and runtime hook contracts. `start` and `createApp` do not run static checks;
+`dev` and `sync` may analyze source to refresh browser contracts, but do not gate
+startup on those diagnostics. `boring inspect` uses the same mandatory checks
 as `boring check`, as do the `boring add` generators. See `ROADMAP.md` in the repository
 for the implementation order and `examples/basic/AGENTS.md` for the consumer workflow.
 

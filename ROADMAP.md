@@ -249,7 +249,8 @@ examples and repository tests.
 
 ## 5. Provide complete database and web application paths
 
-Status: planned. Specific technologies have not been selected.
+Status: implemented and validated. The reference uses PostgreSQL
+with `pg`, a React/Vite SPA and HTML pages through ordinary Boring API routes.
 
 - Choose and document one standard database integration per application, with a
   single schema/migration location and transactions owned by business operations.
@@ -264,3 +265,40 @@ Status: planned. Specific technologies have not been selected.
 
 Acceptance: documented end-to-end examples use the chosen integration consistently
 and retain the same business operations across their API and web entry points.
+
+Delivered in `examples/fullstack`: a single migration history with checksums and
+database locking, a parameterized PostgreSQL adapter, business-owned transactions
+covering orders and audit events, shared permission-checked facades and schemas,
+a React SPA and server-rendered order pages. Setup injects the same orders facade
+into both adapters. Explicit migration, check, development and build scripts make
+the complete reference runnable.
+
+The browser-safe `@boringapi/core/client` entry point provides typed requests,
+query/path encoding, cancellation and HTTP errors without server dependencies.
+When `web/client` exists, source analysis generates standalone `$client` contracts
+from route schemas and effective envelopes. Generated declarations do not import
+application modules. `web/server` is included in mandatory architecture analysis;
+`BORING109` rejects storage/SDK imports and reverse dependencies on presentation.
+Client regression coverage also exercises real HTTP and generated compiler
+contracts for nonempty bracket-encoded query arrays, conditional/imperative
+envelopes, JSON array/tuple null conversion, omitted object fields, empty null
+responses and content-type-aware text/JSON decoding. Empty query arrays fail
+explicitly before fetching; optional fields can be omitted instead.
+Additional compiler and HTTP regressions cover handlers that finish with 204
+before an inherited envelope, imperative payload writes, and synchronous/asynchronous
+envelope overloads. Without an output schema or a single envelope call signature,
+client output stays unknown; explicit output schemas and envelope opt-outs retain
+their concrete contracts.
+
+Validation: `yarn example:check`, `yarn typecheck`, `yarn test` (106 passing tests,
+none skipped), `yarn build`,
+`yarn example:build`, `yarn example:fullstack:check` and
+`yarn example:fullstack:build` passed after the envelope audit fixes. The complete
+suite passed with the standard test command and unchanged timeouts.
+The PostgreSQL integration ran against
+an isolated PostgreSQL 17 instance and covers migration locking/checksums,
+persistence, atomic rollback, shared API/page results, validation and permissions.
+The compiled combined server also passed a separate migration, SPA asset, client,
+API and HTML-page smoke test. Browser declarations resolve with TypeScript 4.9
+without server imports; the package dry run includes the browser subpath and
+excludes example/source/test files. Temporary servers and database were stopped.

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { it } from "node:test";
@@ -25,6 +25,7 @@ before(() => {
     const program = ts.createProgram(config.fileNames, { ...config.options, outDir: join(library, "dist") });
     assert.equal(program.emit().emitSkipped, false);
     write(library, "package.json", readFileSync(join(repository, "package.json"), "utf8"));
+    cpSync(join(repository, "docs"), join(library, "docs"), { recursive: true });
     symlinkSync(join(repository, "node_modules"), join(library, "node_modules"), "dir");
 });
 after(() => rmSync(suite, { recursive: true, force: true }));
@@ -97,6 +98,14 @@ it("initializes default and nested consumers with typed hooks, editor shortcuts 
         assert.equal(manifest.scripts.start, "boring start");
         assert.ok(manifest.dependencies["@boringapi/core"]);
         assert.match(manifest.dependencies.zod, /3\./);
+        const instructions = readFileSync(join(root, "AGENTS.md"), "utf8");
+        const locator = instructions.match(/^node -p "([^"]+)"$/m);
+        assert.ok(locator, "Generated instructions must locate the installed agent guide");
+        const located = spawnSync(process.execPath, ["-p", locator[1]], { cwd: root, encoding: "utf8" });
+        assert.equal(located.status, 0, located.stderr);
+        assert.equal(located.stdout.trim(), join(library, "docs/agent-guide.md"));
+        assert.ok(instructions.includes(`\`${api}/+setup.ts\``));
+        assert.ok(instructions.includes(`\`${api === "api" ? "web/client" : "src/web/client"}/\``));
     }
 });
 

@@ -1,7 +1,9 @@
 # Working on the fullstack reference
 
-The repository AGENTS.md applies. This is one consumer with one PostgreSQL
-database, React SPA and server-rendered order pages.
+Read the [shared Agent guide](../../docs/agent-guide.md) before changing this
+application. The repository [AGENTS.md](../../AGENTS.md) also applies. This is one
+consumer with one PostgreSQL database, React SPA and server-rendered order pages.
+The specifics below supplement the shared workflow.
 
 - Inspect with `yarn ts-node src/cli.ts inspect examples/fullstack/api --project
   tsconfig.fullstack.json` before adding functionality. Reuse `orders.create` and

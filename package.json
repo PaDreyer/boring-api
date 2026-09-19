@@ -18,6 +18,7 @@
       "default": "./dist/index.js"
     },
     "./package.json": "./package.json",
+    "./agent-guide": "./docs/agent-guide.md",
     "./client": {
       "types": "./dist/client.d.ts",
       "require": "./dist/client.js",
@@ -29,7 +30,7 @@
       "default": "./dist/register.js"
     }
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": ["dist", "README.md", "docs", "LICENSE"],
   "engines": { "node": ">=18" },
   "author": "Paul Dreyer",
   "license": "MIT",

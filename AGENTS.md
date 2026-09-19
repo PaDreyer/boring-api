@@ -2,7 +2,7 @@
 
 ## Project intent
 
-Boring API maps filesystem conventions to HTTP routes and cross-cutting behavior. A route should be recognizable from its path and named exports without reading router wiring. The current contract is documented in `README.md`; update it whenever a convention changes.
+Boring API maps filesystem conventions to HTTP routes and cross-cutting behavior. A route should be recognizable from its path and named exports without reading router wiring. The package entry point is `README.md`; detailed contracts live in `docs/`. Update the relevant reference and `docs/agent-guide.md` whenever a convention or recommended workflow changes. Keep the README concise and generated consumer `AGENTS.md` focused on project context plus a pointer to the installed guide. Contributor setup and release instructions belong in `CONTRIBUTING.md`.
 
 ## Where things belong
 
@@ -42,7 +42,7 @@ Boring API maps filesystem conventions to HTTP routes and cross-cutting behavior
 - Architecture checks are mandatory in `boring check`; do not add switches to disable them.
 - Keep architecture analysis static, including unused source, aliases, re-exports and literal CommonJS imports. Diagnose unsupported dynamic loading instead of silently skipping it. Use stable `BORING` diagnostic codes with source locations.
 - The published package exposes consumer commands through `package.json#bin` as `boring`. Repository scripts use the `example:*` prefix when they run the bundled example; do not confuse them with commands copied into consumer projects.
-- Keep everything needed at runtime or by the public declaration files in `dependencies`. A packed tarball must contain the compiled library, executable CLI, README and license without source or example files.
+- Keep everything needed at runtime or by the public declaration files in `dependencies`. A packed tarball must contain the compiled library, executable CLI, README, consumer documentation in `docs`, and license without source or example files. Keep the `@boringapi/core/agent-guide` locator working; verify the actual tarball with `scripts/check-package.js`.
 
 ## Working on the project
 

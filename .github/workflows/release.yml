@@ -98,6 +98,7 @@ jobs:
             echo "Packed version '$packed_version' does not match release version '${{ needs.verify.outputs.version }}'." >&2
             exit 1
           fi
+          node scripts/check-package.js "$package_file"
 
       - name: Upload npm package
         uses: actions/upload-artifact@v4

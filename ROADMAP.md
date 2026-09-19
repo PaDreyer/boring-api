@@ -3,8 +3,9 @@
 Implement these steps in order. The aim is to make existing code easy to find,
 reuse and extend, with few decisions and mechanically checked boundaries.
 Prefer named conventions, inferred types and small functions over configuration
-or mandatory layers. This roadmap describes planned work; the README documents
-the current contract.
+or mandatory layers. This roadmap describes planned work; the [README](README.md)
+and its linked references document the current contract. The
+[Agent guide](docs/agent-guide.md) describes the application workflow.
 
 Design decision: start with plain factory functions, without framework `Facade`
 or `Service` base classes. File conventions and inferred exports already identify

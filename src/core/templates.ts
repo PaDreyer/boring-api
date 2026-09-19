@@ -116,42 +116,44 @@ it("serves the health contract", async () => {
 `,
         "AGENTS.md": `# Working on this Boring API application
 
-1. Run \`npm run inspect\` before adding code. Use \`npm run inspect -- --json\`
-   for the source-derived catalog of routes, operations, schemas, access rules and hooks.
-2. Extend existing modules and reuse their schemas and operations. Do not add a
-   competing service, copied business logic or a storage client in an endpoint.
-3. Use \`boring add module <name>${argument}\` for a new domain and
-   \`boring add endpoint <path/method>${argument}\` for a route. Endpoint templates
-   reuse a matching adapter; use \`--from <path/method>\` to choose explicitly.
-   A new adapter without a template returns 501 until implemented. Review inherited
-   hooks and authorization whenever exposing an operation at another URL.
-4. \`${api}/\` contains HTTP adapters and hooks. Routes declare schemas and access
-   rules, call \`ctx.services\`, set status and return payloads. Import method-specific
-   handler types from \`./$types\` and schemas from \`$modules/<name>/schemas\`.
-5. \`${modules}/<name>/facade.ts\` and \`schemas.ts\` are public; other module files
-   are private. Keep small modules small. Use plain factories, explicit inputs and
-   per-call actors; enforce business permissions inside the operation as well as
-   in the endpoint. Keep request state out of shared services.
-6. \`${infra}/\` owns storage and external clients. Wire dependencies once in
-   \`${api}/+setup.ts\`, import adapters through \`$infra/<path>\`, factories through \`$modules/<name>/facade\` and
-   return services. Do not expose raw storage to routes. Use relative same-module imports.
-7. Hooks use generated \`SetupContext\`, \`AuthenticationContext\`,
-   \`AuthorizationContext\`, \`MiddlewareContext\`, \`EnvelopeContext\` or
-   \`ErrorContext\` from \`./$types\`. Annotate contexts or use \`satisfies\` to
-   preserve inferred return types. Never edit or commit \`.boring/\`.
-8. Run \`npm run check\`, \`npm test\` and \`npm run build\`. Architecture checks
-   are mandatory; fix diagnostics instead of bypassing them. Add tests for new
-   behavior, validation and permission boundaries. After checkout run \`npm run sync\`.
+Before changing application code, read the Agent guide shipped with the installed
+\`@boringapi/core\` version. Locate it from this project root:
 
-\`npm run dev\` watches the API and sibling modules, infrastructure and web source. Use
-\`boring build\` via the build script for production; plain tsc does not rewrite
-\`$modules\` or \`$infra\`. Browser source belongs in \`web/client/\` beside the API and imports
-only browser-safe schemas, never server implementations. Use \`@boringapi/core/client\`
-with \`import type { ApiRoutes } from "$client"\` for requests. The generated
-editor configuration resolves \`$client\` to the selected API's contract.
-Server presentation belongs in \`web/server/\`, takes injected facades and never
-imports storage. Keep module dependencies acyclic. Add real integrations behind
-infrastructure; never embed credentials. Keep generated web assets in build output.
+\`\`\`sh
+node -p "require.resolve('@boringapi/core/agent-guide')"
+\`\`\`
+
+Read the returned file and follow its links for detailed framework contracts.
+Keep project-specific instructions here; do not copy the package guide into this file.
+
+## This project
+
+- API and hooks: \`${api}/\`. Setup: \`${api}/+setup.ts\`.
+- Business modules: \`${modules}/<name>/facade.ts\` and \`schemas.ts\` are public;
+  other module files are private. Import public entries through \`$modules\`.
+- Infrastructure: \`${infra}/\`, imported through \`$infra/<path>\` where allowed.
+  Setup constructs adapters and injects them into facades returned as services.
+- Web source, if added: \`${posix.join(parent, "web/client")}/\` for the browser,
+  \`${posix.join(parent, "web/server")}/\` for server presentation using injected facades.
+- The generated health endpoint is public. No identity provider or persistent
+  storage is configured. Add application-specific access and integration details here.
+
+## Working rules
+
+1. Run \`npm run sync\` after checkout and \`npm run inspect\` before adding code
+   (\`npm run inspect -- --json\` for structured output). Read the existing operations
+   and extend their owning modules; reuse schemas, infrastructure and web clients.
+2. Keep routes thin: generated \`./$types\`, shared schemas, access declarations,
+   calls to \`ctx.services\`, status and returned payloads. Enforce permissions in
+   business operations too; pass actors per call and keep request state out of
+   shared services. Never edit or commit \`.boring/\`.
+3. For a new domain use \`npx boring add module <name>${argument}\`. Add routes with
+   \`npx boring add endpoint '<path/method>'${argument}\`; use \`--from\` to select a
+   compatible existing adapter. Review inherited hooks and access. New stubs return
+   501 until implemented; new modules need explicit setup wiring.
+4. Verify with \`npm run check\`, \`npm test\` and \`npm run build\`. Fix mandatory
+   architecture diagnostics at their source. Use \`npm run dev\` during development
+   and \`npm start\` for the compiled API; build through Boring API so aliases resolve.
 `,
         "README.md": `# Boring API application
 
@@ -180,7 +182,7 @@ Generators preserve existing files; inspect the generated diff and effective hoo
 \`npm run dev\` restarts on changes to \`${api}\`, \`${modules}\`, \`${infra}\` and sibling web source.
 Use \`npm run build\` followed by \`npm start\` for compiled execution. The build
 rewrites \`$modules\` and \`$infra\` imports and checks types, conventions and architecture first.
-See AGENTS.md for the ownership and reuse rules.
+See [AGENTS.md](AGENTS.md) for project rules and the installed package’s Agent guide.
 `,
     };
 }

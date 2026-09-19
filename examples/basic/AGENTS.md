@@ -5,8 +5,11 @@ repository's AGENTS.md also applies while editing this bundled example.
 
 ## Extend existing functionality first
 
-1. Read the relevant endpoint and its `ctx.services` calls. Check `api/+setup.ts`
-   and existing `modules/*/facade.ts` and `schemas.ts` files before adding code.
+1. Run `yarn example:inspect` (or `yarn example:inspect --json` for structured
+   output) before adding code. In a standalone consumer, use `boring inspect`
+   with its API directory. Locate the existing operation, schemas, access rules
+   and effective hooks, then read the reported source files. Inspection does not
+   execute application modules. Fix any check diagnostics before continuing.
 2. Extend the existing domain module when the change belongs to it. The orders
    facade already provides `create` and `get`; do not introduce a second orders
    service or access its storage from an endpoint.
@@ -60,5 +63,5 @@ side effects; keep the documented ownership of storage and business operations.
 
 The token hook is a demonstration controlled by `BORING_API_TOKEN`. The memory
 store is non-persistent demonstration storage. Do not embed credentials or present
-either as a production integration. `boring inspect`, `boring init` and
-`boring add` are planned commands and are not available yet.
+either as a production integration. `boring init` and `boring add` are planned
+commands and are not available yet.

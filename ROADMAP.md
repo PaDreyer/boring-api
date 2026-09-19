@@ -111,7 +111,7 @@ and `yarn build` all passed.
 
 ## 3. Make existing functionality discoverable
 
-Status: planned. `boring inspect` does not exist yet.
+Status: complete (2026-09-19).
 
 - Add `boring inspect` with readable output and a stable JSON format.
 - Derive endpoints, public operations, input/output types, implementation
@@ -124,6 +124,31 @@ Status: planned. `boring inspect` does not exist yet.
 Acceptance: an agent can locate the existing order operation and understand a
 route's effective hooks without reading unrelated files or executing application
 setup. Export signatures and locations stay current after code changes.
+
+Delivered: `boring inspect [api-directory] [--json]` and the repository's
+`yarn example:inspect` script. The version 1 catalog reports routes, callable
+services, all public module exports, Zod input/output types, overloads/generics,
+source locations, access declarations and effective inherited hooks. It follows
+aliases, re-exports and CommonJS exports without executing application code.
+Computed access rules remain explicit expressions instead of guessed values.
+
+Startup, type generation and inspection share the structural scanner and error
+hook precedence. Check and inspect share project analysis and mandatory validation;
+architecture diagnostics and inspection infer services from the same symbols.
+The README documents the JSON contract and static limits. Consumer instructions
+now start with inspection before extending existing modules. Factories and file
+conventions provide the needed metadata; no base classes or registration API are needed.
+
+Validation: `yarn example:check`, `yarn typecheck`, `yarn test` (60 passing tests)
+and `yarn build` all passed. Tests cover non-execution, current signatures,
+CommonJS exports, effective hooks, CLI diagnostics/JSON, structural parity and
+HTTP behavior after consolidating discovery.
+
+The follow-up audit identified four catalog errors, now fixed with regression
+tests: type-only re-export chains retain their type-only status; composed and
+union services expose their available methods; private/protected methods stay
+out of the operation catalog and repair hints; generic constraints/defaults are
+instantiated while preserving dependencies between method type parameters.
 
 ## 4. Generate the established patterns
 

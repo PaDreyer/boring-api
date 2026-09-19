@@ -2,6 +2,7 @@ import { realpathSync } from "fs";
 import { builtinModules } from "module";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import ts from "typescript";
+import { serviceSources } from "./symbols";
 
 export interface ArchitectureDiagnostic {
     code: "BORING101" | "BORING102" | "BORING103" | "BORING104" | "BORING105" | "BORING106" | "BORING107";
@@ -185,34 +186,13 @@ export function checkArchitecture(program: ts.Program, apiDirectory: string, gen
         }
     }
 
-    function publicServices(): string {
-        const setup = [...sources.values()].find(source =>
-            canonical(dirname(source.fileName)) === directories.api && /^\+setup\.[jt]s$/.test(source.fileName.split(sep).pop()!));
-        if (!setup) return "";
-        const symbol = checker.getSymbolAtLocation(setup);
-        const exported = symbol && checker.getExportsOfModule(symbol).find(entry => entry.name === "setup");
-        const signature = exported && checker.getTypeOfSymbolAtLocation(exported, setup).getCallSignatures()[0];
-        if (!signature) return "";
-        let services = signature.getReturnType();
-        if (["Promise", "PromiseLike"].includes(services.getSymbol()?.name ?? "")) {
-            services = checker.getTypeArguments(services as ts.TypeReference)[0] ?? services;
-        }
-        const names: string[] = [];
-        for (const service of services.getProperties()) {
-            const type = checker.getTypeOfSymbolAtLocation(service, setup);
-            if (!(type.flags & ts.TypeFlags.Object)) continue;
-            for (const operation of type.getProperties()) {
-                const location = operation.valueDeclaration ?? operation.declarations?.[0];
-                if (!location || !checker.getTypeOfSymbolAtLocation(operation, location).getCallSignatures().length) continue;
-                const file = location.getSourceFile();
-                const line = file.getLineAndCharacterOfPosition(location.getStart(file)).line + 1;
-                names.push(`ctx.services.${service.name}.${operation.name} (${relative(dirname(directories.api), file.fileName)}:${line})`);
-            }
-        }
-        return names.length ? `\nExisting public operations: ${names.sort().slice(0, 8).join(", ")}.` : "";
-    }
-
-    const servicesHint = publicServices();
+    const operations = serviceSources(program, directories.api).flatMap(service => service.operations).flatMap(operation => {
+        if (!operation.declaration) return [];
+        const file = operation.declaration.getSourceFile();
+        const line = file.getLineAndCharacterOfPosition(operation.declaration.getStart(file)).line + 1;
+        return [`${operation.access} (${relative(dirname(directories.api), file.fileName)}:${line})`];
+    });
+    const servicesHint = operations.length ? `\nExisting public operations: ${operations.slice(0, 8).join(", ")}.` : "";
     for (const [file, edges] of dependencies) {
         const from = area(file);
         if (from.kind === "module" && !from.module) {

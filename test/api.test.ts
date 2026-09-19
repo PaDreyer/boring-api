@@ -248,6 +248,29 @@ it("rejects routes that differ only by case", async () => {
     }
 });
 
+it("keeps explicit HEAD routes and nearest generic/500 error fallbacks after shared discovery", async () => {
+    const root = mkdtempSync(join(tmpdir(), "boring-api-discovery-"));
+    try {
+        mkdirSync(join(root, "scoped", "child"), { recursive: true });
+        writeFileSync(join(root, "get.js"), 'exports.handler = ctx => { ctx.response.setHeader("x-handler", "get"); return null; };');
+        writeFileSync(join(root, "head.js"), 'exports.handler = ctx => { ctx.response.setHeader("x-handler", "head"); return null; };');
+        writeFileSync(join(root, "+error.503.js"), 'exports.handler = () => ({ template: "root503" });');
+        writeFileSync(join(root, "scoped/+error.js"), 'exports.handler = () => ({ template: "scoped" });');
+        writeFileSync(join(root, "scoped/child/+error.500.js"), 'exports.handler = () => ({ template: "child500" });');
+        const errorModule = JSON.stringify(require.resolve("../src/core/errors"));
+        const failure = `const { HttpError } = require(${errorModule}); exports.handler = () => { throw new HttpError(503, "Unavailable"); };`;
+        writeFileSync(join(root, "scoped/get.js"), failure);
+        writeFileSync(join(root, "scoped/child/get.js"), failure);
+        const server = await listen(root);
+        try {
+            assert.equal((await request(server, "HEAD", "/")).headers["x-handler"], "head");
+            assert.equal((await request(server, "GET", "/")).headers["x-handler"], "get");
+            assert.deepEqual((await request(server, "GET", "/scoped")).body, { template: "scoped" });
+            assert.deepEqual((await request(server, "GET", "/scoped/child")).body, { template: "child500" });
+        } finally { await close(server); }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 it("clears a route payload before an error template handles a failure", async () => {
     const root = mkdtempSync(join(tmpdir(), "boring-api-error-payload-"));
     try {

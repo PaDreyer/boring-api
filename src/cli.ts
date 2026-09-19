@@ -5,24 +5,30 @@ import { basename, dirname, join, resolve } from "path";
 import ts from "typescript";
 import { BoringApi } from "./core";
 import { generateTypes } from "./core/typegen";
-import { architectureFiles, checkArchitecture, formatArchitectureDiagnostics } from "./core/architecture";
+import { formatArchitectureDiagnostics } from "./core/architecture";
+import { analyzeProject, formatHost } from "./core/project";
+import { formatInspection, inspectProject } from "./core/inspect";
 
 interface Arguments {
     command: string;
     apiDirectory: string;
     port: number;
+    json: boolean;
 }
 
 function parseArguments(argv: string[]): Arguments {
     const command = argv[0] ?? "help";
     let apiDirectory = "api";
     let port = Number(process.env.PORT ?? 4040);
+    let json = false;
     for (let index = 1; index < argv.length; index++) {
         const value = argv[index];
         if (value === "--port") {
             port = Number(argv[++index]);
         } else if (value === "--dir") {
             apiDirectory = argv[++index];
+        } else if (value === "--json" && command === "inspect") {
+            json = true;
         } else if (!value.startsWith("-")) {
             apiDirectory = value;
         } else {
@@ -32,7 +38,7 @@ function parseArguments(argv: string[]): Arguments {
     if (!Number.isInteger(port) || port < 0 || port > 65535) {
         throw new Error("--port must be an integer between 0 and 65535");
     }
-    return { command, apiDirectory, port };
+    return { command, apiDirectory, port, json };
 }
 
 function projectRoot(from: string): string {
@@ -50,70 +56,19 @@ function sync(root: string, apiDirectory: string): void {
     console.info(`Generated ${result.files.length} type file${result.files.length === 1 ? "" : "s"}.`);
 }
 
-function check(root: string, apiDirectory: string): number {
-    const generated = generateTypes(root, apiDirectory);
-    const configFile = ts.findConfigFile(root, ts.sys.fileExists, "tsconfig.json");
-    const configDiagnostics: ts.Diagnostic[] = [];
-    let fileNames: string[] = [];
-    let options: ts.CompilerOptions = {
-        target: ts.ScriptTarget.ES2020,
-        module: ts.ModuleKind.CommonJS,
-        moduleResolution: ts.ModuleResolutionKind.NodeJs,
-        esModuleInterop: true,
-        strict: true,
-        skipLibCheck: true,
-    };
-
-    if (configFile) {
-        const loaded = ts.readConfigFile(configFile, ts.sys.readFile);
-        if (loaded.error) {
-            console.error(ts.formatDiagnosticsWithColorAndContext([loaded.error], formatHost(root)));
-            return 1;
-        }
-        const parsed = ts.parseJsonConfigFileContent(loaded.config, ts.sys, dirname(configFile), undefined, configFile);
-        configDiagnostics.push(...parsed.errors);
-        fileNames = parsed.fileNames;
-        options = parsed.options;
-    }
-
-    const sourceFiles = collectSourceFiles(generated.apiDirectory);
-    fileNames = [...new Set([...fileNames, ...architectureFiles(generated.apiDirectory), ...generated.files])];
-    options = {
-        ...options,
-        noEmit: true,
-        allowJs: true,
-        rootDir: undefined,
-        rootDirs: [...(options.rootDirs ?? []), root, generated.generatedRoot],
-    };
-
-    const program = ts.createProgram({ rootNames: fileNames, options });
-    const diagnostics = [...configDiagnostics, ...ts.getPreEmitDiagnostics(program)];
-    const architecture = checkArchitecture(program, generated.apiDirectory, generated.generatedRoot);
+function check(root: string, apiDirectory: string, inspect = false, json = false): number {
+    const project = analyzeProject(root, apiDirectory);
+    const { diagnostics, architecture } = project;
     if (diagnostics.length) {
         console.error(ts.formatDiagnosticsWithColorAndContext(diagnostics, formatHost(root)));
     }
     if (architecture.length) console.error(formatArchitectureDiagnostics(architecture, root));
     if (diagnostics.length || architecture.length) return 1;
-    console.info(`Checked ${sourceFiles.length} API source file${sourceFiles.length === 1 ? "" : "s"}.`);
+    if (inspect) {
+        const result = inspectProject(project);
+        console.info(json ? JSON.stringify(result, null, 2) : formatInspection(result));
+    } else console.info(`Checked ${project.sources.contracts.length} API source files.`);
     return 0;
-}
-
-function formatHost(root: string): ts.FormatDiagnosticsHost {
-    return {
-        getCanonicalFileName: file => file,
-        getCurrentDirectory: () => root,
-        getNewLine: () => ts.sys.newLine,
-    };
-}
-
-function collectSourceFiles(directory: string): string[] {
-    const files: string[] = [];
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-        const file = join(directory, entry.name);
-        if (entry.isDirectory()) files.push(...collectSourceFiles(file));
-        else if ((file.endsWith(".ts") || file.endsWith(".js")) && !file.endsWith(".d.ts")) files.push(file);
-    }
-    return files;
 }
 
 async function serve(root: string, apiDirectory: string, port: number): Promise<void> {
@@ -227,6 +182,7 @@ function usage(): void {
 Usage:
   boring dev [api-directory] [--port 4040]
   boring check [api-directory]
+  boring inspect [api-directory] [--json]
   boring start [api-directory] [--port 4040]
   boring sync [api-directory]
 
@@ -239,6 +195,7 @@ async function main(): Promise<void> {
     switch (args.command) {
         case "sync": sync(root, args.apiDirectory); break;
         case "check": process.exitCode = check(root, args.apiDirectory); break;
+        case "inspect": process.exitCode = check(root, args.apiDirectory, true, args.json); break;
         case "start": await serve(root, args.apiDirectory, args.port); break;
         case "dev": await dev(root, args.apiDirectory, args.port); break;
         case "__serve": await serve(root, args.apiDirectory, args.port); break;

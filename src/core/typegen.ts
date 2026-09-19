@@ -1,124 +1,13 @@
-import { Dirent, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync, statSync, writeFileSync } from "fs";
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "path";
 
-const METHODS = new Set(["get", "post", "put", "patch", "delete", "head", "options"]);
-
-interface RouteSource {
-    method: string;
-    file: string;
-    directory: string;
-    middleware: string[];
-}
-
-type ContractKind = "route" | "setup" | "auth" | "hook";
-
-interface ContractSource {
-    file: string;
-    kind: ContractKind;
-}
-
-interface TypegenTree {
-    routes: RouteSource[];
-    contracts: ContractSource[];
-    setup?: string;
-    auth?: string;
-}
+import { ApiSources, ContractSource, RouteSource, scanApi } from "./conventions";
 
 export interface TypegenResult {
     apiDirectory: string;
     generatedRoot: string;
     files: string[];
-}
-
-function sourceName(entry: Dirent): string | undefined {
-    if (!entry.isFile() || entry.name.endsWith(".d.ts")) return undefined;
-    const extension = extname(entry.name);
-    if (extension !== ".ts" && extension !== ".js") return undefined;
-    return entry.name.slice(0, -extension.length);
-}
-
-function scan(apiDirectory: string): TypegenTree {
-    const tree: TypegenTree = { routes: [], contracts: [] };
-    const seenRoutes = new Map<string, string>();
-
-    function walk(directory: string, inheritedMiddleware: string[], segments: string[]): void {
-        const entries = readdirSync(directory, { withFileTypes: true })
-            .sort((left, right) => left.name.localeCompare(right.name));
-        let middleware: string | undefined;
-        const sourceFiles = new Map<string, string>();
-
-        for (const entry of entries) {
-            const name = sourceName(entry);
-            if (!name) continue;
-            const file = join(directory, entry.name);
-            const duplicate = sourceFiles.get(name);
-            if (duplicate) throw new Error(`Duplicate source files: ${duplicate} and ${file}`);
-            sourceFiles.set(name, file);
-
-            if (!name.startsWith("+")) {
-                if (!METHODS.has(name)) throw new Error(`Unsupported endpoint file: ${file}`);
-                continue;
-            }
-
-            switch (name) {
-                case "+setup":
-                    if (segments.length) throw new Error(`${file}: +setup is only allowed at the API root`);
-                    tree.setup = file;
-                    tree.contracts.push({ file, kind: "setup" });
-                    break;
-                case "+auth":
-                    if (segments.length) throw new Error(`${file}: +auth is only allowed at the API root`);
-                    tree.auth = file;
-                    tree.contracts.push({ file, kind: "auth" });
-                    break;
-                case "+middleware":
-                    middleware = file;
-                    tree.contracts.push({ file, kind: "hook" });
-                    break;
-                case "+envelope":
-                case "+error":
-                    tree.contracts.push({ file, kind: "hook" });
-                    break;
-                default:
-                    if (!/^\+error\.[4-5]\d\d$/.test(name)) {
-                        throw new Error(`Unknown convention file: ${file}`);
-                    }
-                    tree.contracts.push({ file, kind: "hook" });
-            }
-        }
-
-        const middlewareChain = middleware ? [...inheritedMiddleware, middleware] : inheritedMiddleware;
-        for (const entry of entries) {
-            const file = join(directory, entry.name);
-            if (entry.isDirectory()) {
-                walk(file, middlewareChain, [...segments, endpointSegment(entry.name)]);
-                continue;
-            }
-            const name = sourceName(entry);
-            if (name && METHODS.has(name)) {
-                const path = segments.length ? `/${segments.join("/")}` : "/";
-                const normalizedPath = path
-                    .replace(/:[A-Za-z_][A-Za-z0-9_]*/g, ":param")
-                    .toLowerCase();
-                const key = `${name} ${normalizedPath}`;
-                const duplicate = seenRoutes.get(key);
-                if (duplicate) throw new Error(`Duplicate route ${key}: ${duplicate} and ${file}`);
-                seenRoutes.set(key, file);
-                tree.routes.push({ method: name, file, directory, middleware: middlewareChain });
-                tree.contracts.push({ file, kind: "route" });
-            }
-        }
-    }
-
-    walk(apiDirectory, [], []);
-    return tree;
-}
-
-function endpointSegment(name: string): string {
-    const dynamic = /^\[([A-Za-z_][A-Za-z0-9_]*)\]$/.exec(name);
-    if (dynamic) return `:${dynamic[1]}`;
-    if (/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(name)) return name;
-    throw new Error(`Invalid endpoint directory '${name}'. Use a URL segment or [param].`);
+    sources: ApiSources;
 }
 
 function moduleSpecifier(fromFile: string, targetFile: string): string {
@@ -171,7 +60,7 @@ function generatedFile(
     }
     lines.push("");
 
-    const middleware = routes[0]?.middleware ?? [];
+    const middleware = routes[0]?.scope.middleware ?? [];
     middleware.forEach((file, index) => {
         lines.push(`type Middleware${index} = typeof import(${JSON.stringify(moduleSpecifier(outputFile, file))});`);
         lines.push(`type MiddlewareLocals${index} = ObjectReturn<Middleware${index}["handler"]>;`);
@@ -276,7 +165,7 @@ export function generateTypes(projectRoot: string, apiDirectory: string): Typege
     const generatedRoot = join(root, ".boring", "types");
     const generatedApiRoot = join(generatedRoot, apiPath);
     childPath(generatedRoot, generatedApiRoot, "Generated types directory");
-    const tree = scan(api);
+    const tree = scanApi(api);
 
     rejectSymbolicLinkPath(root, generatedApiRoot);
     rmSync(generatedApiRoot, { recursive: true, force: true });
@@ -309,5 +198,5 @@ export function generateTypes(projectRoot: string, apiDirectory: string): Typege
         compilerOptions: { rootDirs: ["..", "./types"] },
     }, null, 2)}\n`);
 
-    return { apiDirectory: api, generatedRoot, files };
+    return { apiDirectory: api, generatedRoot, files, sources: tree };
 }

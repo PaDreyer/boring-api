@@ -31,11 +31,13 @@ After a local installation, the command is available in the application's packag
 
 ## CLI
 
-The three standard commands handle loading, type generation, and validation:
+The standard commands handle loading, discovery, type generation, and validation:
 
 ```bash
 boring dev                 # load ./api, generate types, and restart on changes
 boring check               # generate types and check the project with TypeScript
+boring inspect             # find existing routes, operations, schemas and hooks
+boring inspect --json      # the same catalog in a versioned machine-readable format
 boring start               # start the compiled API without a watcher
 ```
 
@@ -56,6 +58,7 @@ Add these scripts to the `package.json` of an application that uses Boring API:
   "scripts": {
     "dev": "boring dev",
     "check": "boring check",
+    "inspect": "boring inspect",
     "start": "boring start dist/api"
   }
 }
@@ -359,13 +362,95 @@ framework is selected by the `web/client` boundary.
 
 Run `boring check` in development and CI. Startup still validates API structure
 and runtime hook contracts; `dev`, `start`, `sync` and `createApp` do not run the
-static architecture analysis. `boring inspect` and generators are planned next
-and are not available commands yet. See `ROADMAP.md` in the repository for the
-implementation order and `examples/basic/AGENTS.md` for the consumer workflow.
+static architecture analysis. `boring inspect` uses the same mandatory checks
+as `boring check`. Generators are planned next. See `ROADMAP.md` in the repository
+for the implementation order and `examples/basic/AGENTS.md` for the consumer workflow.
+
+## Discover existing functionality
+
+Run `boring inspect` before adding an endpoint or business operation. It lists
+routes, callable services exposed through `ctx.services`, and exports from all
+public `modules/<name>/facade` and `schemas` files, including unused modules.
+Follow the reported source location and extend an existing module when the
+operation belongs there. No registry, metadata class or duplicated catalog is needed.
+
+```bash
+boring inspect src/api
+boring inspect src/api --json > api-catalog.json
+```
+
+For example, the orders application exposes `ctx.services.orders.create` and
+`ctx.services.orders.get`, with their parameter and return types and implementation
+locations. Each route also shows input/output schema types, authentication and
+authorization declarations, middleware in execution order, and the selected
+envelope and error hooks. Public exports include signatures, inferred types,
+source locations and JSDoc descriptions in JSON; re-exports point to their definitions.
+Type-only exports remain types, including through import aliases and re-export
+chains; they are not offered as runtime operations. Generic operation signatures
+use the instantiated constraints and defaults of the returned service.
+
+Inspection uses TypeScript source analysis. It does not import or execute
+application setup, hooks, schemas, routes or dependencies. Each run regenerates
+`.boring/types` and reads the current source; no inspection cache needs updating.
+Invalid structure, contracts, types or architecture produce diagnostics on stderr
+and exit status 1, with no catalog on stdout. Fix these errors and run inspection
+again. Successful `--json` output is exactly one JSON object on stdout.
+
+### JSON contract, version 1
+
+The root object contains these fields:
+
+| Field | Contents |
+| --- | --- |
+| `schemaVersion` | `1`. Breaking changes to the catalog structure increment this value; readers should ignore additional fields. |
+| `apiDirectory` | Selected API path relative to the consumer project root. |
+| `setup`, `auth` | Setup and authentication/authorization hook locations, or `null` when absent. |
+| `routes` | Method, URL path, handler location/return types, `input`, `output`, `access`, and effective `hooks`. |
+| `services` | Callable services inferred from the return type of `+setup`, with exact `ctx.services` access expressions and operation signatures. |
+| `modules` | Public facade/schema exports, including callable exports, schemas, values and types. |
+| `unmatchedErrors` | Root error hooks used when no route matches. |
+
+Locations have `{ "file": "modules/orders/facade.ts", "line": 17, "column": 9 }`,
+with project-relative forward-slash paths and one-based positions. Routes follow
+registration order: static segments before parameters and explicit HEAD before
+GET at the same path. Modules, services and exports sort by name; the catalog has
+no timestamps or absolute project-root field.
+
+Route `input.params`, `input.query`, `input.body` and `output` are `null` when
+absent; otherwise each has `source`, `inputType` and `outputType`. These describe
+the Zod input and parsed output, including transforms. Types and signatures are
+TypeScript descriptions, not JSON Schema. A handler's declared return type can
+be `unknown` without an output schema. Response status, early `ctx.send()` calls
+and envelope transformations are not inferred as final HTTP response schemas.
+
+`access.authentication` and `access.authorization` contain a declaration or
+`null`. Declarations distinguish `kind: "literal"` with a `value`, explicit
+`kind: "undefined"`, and `kind: "expression"` with source text and a TypeScript
+type. Literal syntax and references to constants can be read statically; calls,
+mutable declarations and other computed values remain expressions. This describes
+source declarations, not changes caused by runtime side effects. `access.session`
+is `required`, `optional`, or `conditional` when a computed declaration prevents
+a static decision. Authorization hooks themselves are never evaluated.
+
+`hooks.middleware` is ordered root to leaf. `hooks.envelope` reports the nearest
+hook, its route declaration, and whether it is enabled (`true`, `false`, or
+`"conditional"`); a missing hook has `source: null`. It still follows the normal
+204 and early-response rules. `hooks.errors.generic` and `server` report the
+generic and 5xx fallbacks; `statuses` maps explicitly configured statuses to their
+effective handlers. Selection checks the nearest scope first: exact status,
+then that scope's 500 hook for server errors, then its generic hook, before
+walking upward. A `null` location means the framework's default error response.
+
+Service discovery lists public callable properties of returned service objects and
+directly returned functions. This includes composed objects and the common callable
+properties of object unions. Private and protected methods are excluded, including
+ECMAScript `#private` methods. Values stored only through imperative Map writes
+or hidden behind `any` have no statically discoverable signatures. Inspect the
+reported public entry points when more implementation detail is needed.
 
 ## Generated types
 
-`boring dev`, `boring check`, and `boring sync` generate a virtual `$types` module under `.boring/types` for every route directory. The generator does not evaluate application code or duplicate schemas. The generated types reference the exports of the corresponding method file:
+`boring dev`, `boring check`, `boring inspect`, and `boring sync` generate a virtual `$types` module under `.boring/types` for every route directory. The generator does not evaluate application code or duplicate schemas. The generated types reference the exports of the corresponding method file:
 
 - `params`, `query`, and `body` are typed according to their Zod output.
 - The return value of `GetHandler` or `PostHandler` must match the input of the `output` schema.
@@ -395,7 +480,7 @@ If the application already extends another base configuration, add only `rootDir
 }
 ```
 
-The configuration is created the first time you run `boring sync`, `boring dev`, or `boring check`. `boring check` sets `rootDirs` itself, so it also works without this editor setting.
+The configuration is created the first time you run `boring sync`, `boring dev`, `boring check`, or `boring inspect`. Both `check` and `inspect` set `rootDirs` themselves, so they also work without this editor setting.
 The API directory must be inside the project because its location is mapped to the generated `.boring/types` directory.
 
 ## Files prefixed with `+`
@@ -428,6 +513,7 @@ This section applies only when working on the `boring-api` repository. These scr
 yarn install
 yarn example:dev     # run the local source against examples/basic/api
 yarn example:check   # check the local example
+yarn example:inspect # discover the example's routes and existing operations
 yarn example:sync    # generate only the local example's types
 yarn example:start   # start examples/basic/server.ts
 yarn typecheck

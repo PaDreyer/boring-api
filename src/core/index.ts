@@ -3,9 +3,10 @@ import { Server } from "http";
 import { ZodTypeAny } from "zod";
 import { Context } from "./context";
 import { discover } from "./discovery";
+import { findErrorTemplate } from "./conventions";
 import { asHttpError, HttpError } from "./errors";
 import { SetupContext } from "./setupContext";
-import { AuthModule, ErrorModule, Route, RouteScope } from "./types";
+import { AuthModule, Route, RouteScope } from "./types";
 
 function parseInput(schema: ZodTypeAny | undefined, value: unknown, field: string): unknown {
     if (!schema) return value;
@@ -16,16 +17,6 @@ function parseInput(schema: ZodTypeAny | undefined, value: unknown, field: strin
             ? (error as { issues: unknown }).issues : undefined;
         throw new HttpError(400, `Invalid ${field}`, details);
     }
-}
-
-function findErrorTemplate(scope: RouteScope, status: number): ErrorModule | undefined {
-    for (let i = scope.errors.length - 1; i >= 0; i--) {
-        const layer = scope.errors[i];
-        const template = layer.statuses.get(status) ??
-            (status >= 500 ? layer.statuses.get(500) : undefined) ?? layer.generic;
-        if (template) return template;
-    }
-    return undefined;
 }
 
 function registerRoute(app: Express, route: Route, auth: AuthModule | undefined, setup: SetupContext) {
@@ -104,7 +95,7 @@ export class BoringApi {
             res.status(httpError.status);
 
             const scope = (res.locals.boringScope as RouteScope | undefined) ?? rootScope;
-            const hook = findErrorTemplate(scope, httpError.status);
+            const hook = findErrorTemplate(scope.errors, httpError.status);
             if (hook) {
                 const ctx = (res.locals.boringContext as Context | undefined) ?? new Context(req, res, setup);
                 const cause = error instanceof Error ? error : new Error(String(error));

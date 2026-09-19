@@ -30,6 +30,7 @@
   "scripts": {
     "example:dev": "ts-node src/cli.ts dev examples/basic/api",
     "example:check": "ts-node src/cli.ts check examples/basic/api",
+    "example:inspect": "ts-node src/cli.ts inspect examples/basic/api",
     "example:sync": "ts-node src/cli.ts sync examples/basic/api",
     "example:start": "ts-node examples/basic/server.ts",
     "build": "node scripts/build.js",

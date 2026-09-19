@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { ChildProcess, spawn } from "child_process";
 import { existsSync, readdirSync, watch, FSWatcher } from "fs";
-import { dirname, join, resolve } from "path";
+import { basename, dirname, join, resolve } from "path";
 import ts from "typescript";
 import { BoringApi } from "./core";
 import { generateTypes } from "./core/typegen";
@@ -118,27 +118,50 @@ async function serve(root: string, apiDirectory: string, port: number): Promise<
 }
 
 function watchDirectories(directory: string, onChange: () => void): () => void {
+    const parent = dirname(directory);
+    const names = new Set([basename(directory), "modules", "infra"]);
     let watchers: FSWatcher[] = [];
-    let refreshing = false;
+    let timer: NodeJS.Timeout | undefined;
+    let stopped = false;
+    const scheduleRefresh = () => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(refresh, 50);
+    };
     const refresh = () => {
-        if (refreshing) return;
-        refreshing = true;
+        if (stopped) return;
         for (const watcher of watchers) watcher.close();
         watchers = [];
         const visit = (current: string) => {
-            watchers.push(watch(current, (event) => {
-                onChange();
-                if (event === "rename") setTimeout(refresh, 150);
-            }));
-            for (const entry of readdirSync(current, { withFileTypes: true })) {
-                if (entry.isDirectory()) visit(join(current, entry.name));
+            try {
+                const entries = readdirSync(current, { withFileTypes: true });
+                watchers.push(watch(current, (event) => {
+                    if (stopped) return;
+                    onChange();
+                    if (event === "rename") scheduleRefresh();
+                }));
+                for (const entry of entries) {
+                    if (entry.isDirectory()) visit(join(current, entry.name));
+                }
+            } catch (error) {
+                // A source directory may be absent, removed or replaced during a save.
+                const code = (error as NodeJS.ErrnoException).code;
+                if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
             }
         };
-        visit(directory);
-        refreshing = false;
+        // Notice sibling roots created after dev starts, without watching build output.
+        watchers.push(watch(parent, (_event, filename) => {
+            if (stopped || (filename !== null && !names.has(filename.toString()))) return;
+            onChange();
+            scheduleRefresh();
+        }));
+        for (const name of names) visit(join(parent, name));
     };
     refresh();
-    return () => watchers.forEach(watcher => watcher.close());
+    return () => {
+        stopped = true;
+        if (timer) clearTimeout(timer);
+        for (const watcher of watchers) watcher.close();
+    };
 }
 
 async function dev(root: string, apiDirectory: string, port: number): Promise<void> {

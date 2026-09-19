@@ -47,7 +47,7 @@ boring check src/api
 boring start dist/api --port 3000
 ```
 
-`boring dev` loads TypeScript through `ts-node`, generates types before every restart, and watches the API directory. `boring check` checks TypeScript, file conventions, and the export contracts of every route and hook. `boring start` is intended for compiled JavaScript. `boring sync` only generates the type files.
+`boring dev` loads TypeScript through `ts-node`, generates types before every restart, and watches the API directory and its sibling `modules` and `infra` directories, including directories added during development. For example, `boring dev src/api` watches `src/api`, `src/modules` and `src/infra`. Files elsewhere are not watched. `boring check` checks TypeScript, file conventions, and the export contracts of every route and hook. `boring start` is intended for compiled JavaScript. `boring sync` only generates the type files.
 
 Add these scripts to the `package.json` of an application that uses Boring API:
 
@@ -86,29 +86,19 @@ main().catch(error => {
 The names `get.ts`, `post.ts`, `put.ts`, `patch.ts`, `delete.ts`, `head.ts`, and `options.ts` are reserved. A `get.ts` directly inside `api/` handles `GET /`. A folder named `[id]` becomes the `:id` URL parameter. Static routes take precedence over dynamic routes. Duplicate or unknown convention files cause startup to fail.
 
 ```ts
-// api/articles/[id]/get.ts
-import z from "zod";
-import { HttpError } from "@boringapi/core";
+// api/orders/[id]/get.ts
+import { order, orderParams } from "../../../modules/orders/schemas";
 import type { GetHandler } from "./$types";
 
-type ArticleStore = {
-    find(id: string): Promise<{ id: string; title: string } | undefined>;
-};
+export const params = orderParams;
+export const output = order;
+export const authorization = "admin";
 
-export const params = z.object({ id: z.string().min(1) });
-export const output = z.object({ id: z.string(), title: z.string() });
-export const authentication = true;
-
-export const handler: GetHandler = async ctx => {
-    const store = ctx.services.articles;
-    const { id } = ctx.params;
-    const article = await store.find(id);
-    if (!article) throw new HttpError(404, "Article not found");
-    return article;
-};
+export const handler: GetHandler = ctx =>
+    ctx.services.orders.get({ id: ctx.params.id, actor: ctx.session });
 ```
 
-Here, `ArticleStore` represents the type of an application-owned service. It is registered in `+setup.ts`. See `examples/basic/api` for a directly reusable demo.
+The orders facade is registered in `+setup.ts`; its types flow into `ctx.services` automatically. Its public schemas define the request and response contracts. `+auth.ts` interprets the `admin` authorization rule. See the application structure below and `examples/basic` for the complete, runnable implementation.
 
 | Method file export | Effect |
 | --- | --- |
@@ -120,6 +110,102 @@ Here, `ArticleStore` represents the type of an application-owned service. It is 
 | `envelope = false` | Skips the inherited envelope for this route. |
 
 Invalid input returns HTTP 400; invalid output returns HTTP 500. A handler with no return value and no `ctx.payload` returns HTTP 204. Setting `ctx.payload = value` is an alternative to returning a value. `ctx.status(201)` sets the success status. `ctx.send(value)` sends immediately, bypassing `output` validation and the envelope.
+
+## Application modules
+
+Use this structure when building an application with Boring API:
+
+```text
+app/
+├── api/                         the explicitly selected API directory
+│   ├── +setup.ts                initialize dependencies and expose facades
+│   ├── +auth.ts                 authenticate and check route access rules
+│   └── orders/
+│       ├── post.ts              POST /orders
+│       ├── +error.404.ts         missing-order response
+│       └── [id]/get.ts           GET /orders/:id
+├── modules/
+│   └── orders/
+│       ├── facade.ts            public business operations
+│       └── schemas.ts           public Zod schemas and inferred types
+└── infra/
+    └── memoryStore.ts           demonstration storage adapter
+```
+
+The `modules` and `infra` directories are siblings of the selected API directory,
+even if it is named something other than `api`. Only the API directory is scanned
+for routes and hooks. These module names describe the standard application
+structure; they do not introduce automatic service registration or additional
+reserved `+` files.
+
+| Boundary | Responsibility |
+| --- | --- |
+| Endpoints | Select input/output schemas, declare route access rules, call `ctx.services.<module>` and set HTTP status. |
+| `modules/<name>/facade.ts` | Expose business operations with explicit inputs and actor identity. Check business permissions for every caller, including jobs or server-rendered pages. |
+| `modules/<name>/schemas.ts` | Share Zod schemas and inferred data types. Keep contracts independent of server clients so browser code can reuse them later. |
+| `modules/<name>/internal/` | Optional private implementation details. Introduce this directory only when the facade needs to be split. |
+| `infra/` | Implement storage and external clients. Keep these dependencies out of endpoint handlers. |
+| `+setup.ts` | Create infrastructure and inject it into facades once per application. Return facades through the existing `ctx.services` contract. |
+
+Other modules use a module's `facade.ts` and `schemas.ts`, never its internal files.
+Keep dependencies acyclic. A facade can start as a single factory function; no
+framework base class, decorator, service wrapper or repository layer is required.
+Add private helpers as the module grows. Before adding a new module, look for an
+existing facade that owns the business operation.
+
+For example, the orders module shares these contracts between its create and get
+endpoints:
+
+```ts
+// modules/orders/schemas.ts
+import z from "zod";
+
+export const createOrder = z.object({
+    item: z.string().trim().min(1),
+    quantity: z.number().int().min(1).max(100),
+});
+export const order = createOrder.extend({ id: z.string().uuid() });
+export const orderParams = order.pick({ id: true });
+export type CreateOrder = z.infer<typeof createOrder>;
+export type Order = z.infer<typeof order>;
+```
+
+The example's `createOrders(store)` factory exposes `create({ input, actor })` and
+`get({ id, actor })`. Both require an actor with the `admin` role; `get` throws
+`HttpError(404, "Order not found")` for an unknown order. These explicit errors are
+handled by the normal Boring API error pipeline. The facade accepts plain values
+and does not depend on an Express request or response. Non-HTTP callers must
+validate untrusted input with the shared schemas and supply a trusted actor;
+the facade still checks its business permissions.
+
+The setup hook supplies the storage implementation:
+
+```ts
+// api/+setup.ts
+import { createMemoryStore } from "../infra/memoryStore";
+import { createOrders } from "../modules/orders/facade";
+import type { Order } from "../modules/orders/schemas";
+
+export function setup() {
+    const orderStore = createMemoryStore<Order>();
+    return { orders: createOrders(orderStore) };
+}
+```
+
+Storage contains domain records shared by this application's requests. Actors,
+sessions and other request state stay in each call. The example creates fresh
+storage for each `createApp()` call; it never places records or actors in module
+globals. Its in-memory adapter loses data on restart and is not a production
+database integration.
+
+These boundaries are currently **documented conventions**. `boring check` validates
+API conventions, export contracts and TypeScript types; it does not yet reject
+cross-module internal imports or direct infrastructure imports in endpoints.
+Include all application source directories in the consumer's `tsconfig.json` so
+unused modules are also typechecked. Architecture enforcement, `boring inspect`
+and generators are planned next; they are not available commands yet. See
+`ROADMAP.md` in the repository for the implementation order and
+`examples/basic/AGENTS.md` for the consumer workflow.
 
 ## Generated types
 
@@ -228,3 +314,26 @@ curl -X POST http://localhost:4040/echo \
 ```
 
 The responses are `{"service":"boring-api","status":"ok"}`, `{"id":"42"}`, and `{"data":{"message":"Hello"}}`. The current scope supports JSON bodies and individual dynamic segments such as `[id]`. Catch-all segments are not defined yet.
+
+To exercise the orders module, set your own `BORING_API_TOKEN` in the shell before
+starting `yarn example:dev`. The example token hook grants the `admin` role to a
+matching bearer token; it is demonstration authentication. Use the same token in
+the client shell:
+
+```bash
+curl -X POST http://localhost:4040/orders \
+  -H "Authorization: Bearer $BORING_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"item":"Notebook","quantity":2}'
+
+# Replace <id> with the ID returned by POST /orders.
+curl "http://localhost:4040/orders/<id>" \
+  -H "Authorization: Bearer $BORING_API_TOKEN"
+```
+
+Creation returns HTTP 201 with `{"data":{"id":"<uuid>","item":"Notebook","quantity":2}}`;
+retrieval returns the same envelope with HTTP 200. Both routes require a valid
+token (otherwise HTTP 401). Invalid input returns HTTP 400, and a valid but unknown
+order UUID returns HTTP 404 with `{"error":{"message":"Order not found"}}`.
+To add another order operation, extend the existing facade and schemas, then add
+the method file that calls it. Reuse the store injected by `+setup.ts`.

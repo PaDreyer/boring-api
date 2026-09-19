@@ -1,0 +1,46 @@
+# Working on this consumer application
+
+This application demonstrates Boring API's standard module structure. The root
+repository's AGENTS.md also applies while editing this bundled example.
+
+## Extend existing functionality first
+
+1. Read the relevant endpoint and its `ctx.services` calls. Check `api/+setup.ts`
+   and existing `modules/*/facade.ts` and `schemas.ts` files before adding code.
+2. Extend the existing domain module when the change belongs to it. The orders
+   facade already provides `create` and `get`; do not introduce a second orders
+   service or access its storage from an endpoint.
+3. Reuse Zod schemas and infer types from them. Route files import method-specific
+   handlers from `./$types`; never edit generated files.
+4. Verify success, failure and permission behavior, then run the repository's
+   `yarn example:check`, `yarn typecheck`, `yarn test` and `yarn build` commands.
+   In a standalone consumer, use its own `boring check` script and test/build commands.
+
+## Application boundaries
+
+- `api/` contains HTTP routes and convention hooks. Endpoints choose schemas,
+  declare access rules, call facades and set response status. Return payloads.
+- `modules/<name>/facade.ts` exposes business operations. Accept typed inputs and
+  an explicit actor; enforce business permissions inside these operations so
+  callers outside HTTP cannot bypass them. Do not accept an Express context.
+- `modules/<name>/schemas.ts` exposes shared Zod contracts and inferred types.
+  Non-HTTP callers validate untrusted data with these schemas before calling a
+  facade, just as Boring API validates route input.
+- Keep helpers private in the facade until an `internal/` directory is useful.
+  Other modules use only `facade.ts` and `schemas.ts`, never implementation files.
+- `infra/` owns storage and external clients. `api/+setup.ts` initializes these
+  dependencies once per application, injects them into facades, and returns the
+  facades through `ctx.services`. Do not expose raw storage to endpoints.
+- Keep actors, sessions and other request state out of shared services. The demo
+  store contains domain records and is created separately for each application.
+- Do not add services/repositories that merely forward calls. Keep module
+  dependencies acyclic and keep infrastructure independent of endpoints.
+
+These module boundaries are currently a documented application convention;
+`boring check` checks API file conventions and types, but does not enforce module
+import boundaries yet. See the repository roadmap for that next step.
+
+The token hook is a demonstration controlled by `BORING_API_TOKEN`. The memory
+store is non-persistent demonstration storage. Do not embed credentials or present
+either as a production integration. `boring inspect`, `boring init` and
+`boring add` are planned commands and are not available yet.

@@ -128,6 +128,82 @@ it("boring check reports tsconfig parse errors", () => {
     }
 });
 
+it("boring check validates permission rules for annotated and unannotated handlers without executing hooks", () => {
+    const root = mkdtempSync(join(tmpdir(), "boring-api-check-permissions-"));
+    try {
+        writeProject(root);
+        writeFileSync(join(root, "api", "+auth.ts"), [
+            'import type { Context, PermissionRule } from "@boringapi/core";',
+            'throw new Error("check must not execute auth modules");',
+            'export function authenticate() { return { permissions: ["orders:read"] as const }; }',
+            'export function authorize(_ctx: Context, _rule: PermissionRule<"orders:read" | "orders:create">): void {}',
+        ].join("\n"));
+        const valid = [
+            '"orders:read"',
+            '{ allOf: ["orders:read", "orders:create"] } as const',
+            '{ anyOf: ["orders:read", "orders:create"] } as const',
+        ];
+        for (const [index, rule] of valid.entries()) {
+            const directory = join(root, "api", `valid-${index}`);
+            mkdirSync(directory);
+            writeFileSync(join(directory, "get.ts"), [
+                'import type { GetHandler } from "./$types";',
+                `export const authorization = ${rule};`,
+                'export const handler: GetHandler = ctx => ({ permissions: ctx.session.permissions });',
+            ].join("\n"));
+            writeFileSync(join(directory, "post.ts"), [
+                `export const authorization = ${rule};`,
+                'export const handler = () => ({ ok: true });',
+            ].join("\n"));
+        }
+        const good = check(root);
+        assert.equal(good.status, 0, `${good.stdout}\n${good.stderr}`);
+
+        const invalid = [
+            '"orders:typo"',
+            '{ allOf: ["orders:read", "orders:typo"] } as const',
+            '{ anyOf: ["orders:read", "orders:typo"] } as const',
+            '{ allOf: [] } as const',
+            '{ anyOf: [] } as const',
+            '{ allOf: ["orders:read"], anyOf: ["orders:create"] } as const',
+            '["orders:read"] as const',
+        ];
+        for (const [index, rule] of invalid.entries()) {
+            const directory = join(root, "api", `invalid-${index}`);
+            mkdirSync(directory);
+            writeFileSync(join(directory, "get.ts"), [
+                `export const authorization = ${rule};`,
+                'export const handler = () => ({ ok: true });',
+            ].join("\n"));
+        }
+        const bad = check(root);
+        assert.equal(bad.status, 1);
+        const diagnostics = `${bad.stdout}\n${bad.stderr}`;
+        for (const index of invalid.keys()) assert.ok(diagnostics.includes(`invalid-${index}/get`), diagnostics);
+        assert.ok(!diagnostics.includes("check must not execute auth modules"), diagnostics);
+    } finally {
+        rmSync(root, { recursive: true, force: true });
+    }
+});
+
+it("boring check preserves custom authorization contracts", () => {
+    const root = mkdtempSync(join(tmpdir(), "boring-api-check-custom-auth-"));
+    try {
+        writeProject(root);
+        writeFileSync(join(root, "api", "+auth.ts"), [
+            'export function authorize(_ctx: unknown, _rule: { resource: "orders"; action: "read" }): void {}',
+        ].join("\n"));
+        writeFileSync(join(root, "api", "get.ts"), [
+            'export const authorization = { resource: "orders", action: "read" } as const;',
+            'export const handler = () => ({ ok: true });',
+        ].join("\n"));
+        const result = check(root);
+        assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    } finally {
+        rmSync(root, { recursive: true, force: true });
+    }
+});
+
 it("generated locals use the last middleware value for duplicate keys", () => {
     const root = mkdtempSync(join(tmpdir(), "boring-api-check-locals-"));
     try {

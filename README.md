@@ -92,13 +92,13 @@ import type { GetHandler } from "./$types";
 
 export const params = orderParams;
 export const output = order;
-export const authorization = "admin";
+export const authorization = "orders:read";
 
 export const handler: GetHandler = ctx =>
     ctx.services.orders.get({ id: ctx.params.id, actor: ctx.session });
 ```
 
-The orders facade is registered in `+setup.ts`; its types flow into `ctx.services` automatically. Its public schemas define the request and response contracts. `+auth.ts` interprets the `admin` authorization rule. See the application structure below and `examples/basic` for the complete, runnable implementation.
+The orders facade is registered in `+setup.ts`; its types flow into `ctx.services` automatically. Its public schemas define the request and response contracts. `+auth.ts` checks the `orders:read` permission. See the application structure below and `examples/basic` for the complete, runnable implementation.
 
 | Method file export | Effect |
 | --- | --- |
@@ -110,6 +110,102 @@ The orders facade is registered in `+setup.ts`; its types flow into `ctx.service
 | `envelope = false` | Skips the inherited envelope for this route. |
 
 Invalid input returns HTTP 400; invalid output returns HTTP 500. A handler with no return value and no `ctx.payload` returns HTTP 204. Setting `ctx.payload = value` is an alternative to returning a value. `ctx.status(201)` sets the success status. `ctx.send(value)` sends immediately, bypassing `output` validation and the envelope.
+
+## Permission authorization
+
+Declare the capability a route requires. Roles bundle permissions; endpoints and
+business operations check permissions rather than role names. The optional
+`PermissionRule<Permission>` type and `requirePermissions(granted, rule)` helper
+are exported by `@boringapi/core`. They work with the existing `authorize()` hook;
+custom authorization contracts remain supported.
+
+Keep an application-owned catalog outside `api/`, using `resource:action` names:
+
+```ts
+// modules/access/schemas.ts
+import type { PermissionRule } from "@boringapi/core";
+
+export const permissions = {
+    "orders:read": "Read orders",
+    "orders:create": "Create orders",
+} as const;
+
+export type Permission = keyof typeof permissions;
+export type AuthorizationRule = PermissionRule<Permission>;
+export interface Actor {
+    readonly permissions: readonly Permission[];
+}
+```
+
+Use one of these declarations in a method file:
+
+```ts
+export const authorization = "orders:read";
+```
+
+```ts
+// Both permissions are required.
+export const authorization = {
+    allOf: ["orders:read", "orders:create"],
+} as const;
+```
+
+```ts
+// At least one permission is required.
+export const authorization = {
+    anyOf: ["orders:read", "orders:create"],
+} as const;
+```
+
+Keep `as const` for object rules so TypeScript preserves the permission literals
+and non-empty tuples. Bare arrays, empty lists, nested rules and objects with
+both `allOf` and `anyOf` are invalid. The helper also rejects malformed rules at
+runtime with a `TypeError` (HTTP 500), even when the caller has permissions. It
+matches names exactly, with no role-name exceptions or wildcard expansion.
+
+In `modules/access/facade.ts`, the example explicitly maps `viewer` to
+`orders:read`, `creator` to `orders:create`, and `admin` to both. Its
+`permissionsForRoles(roles)` returns a fresh, deduplicated union for each caller.
+Add grants explicitly when introducing a permission; `admin` does not
+automatically acquire new permissions.
+
+`authenticate()` resolves the trusted identity and role assignments on the
+server, then returns a session with the effective permissions. Never use role or
+permission lists supplied directly in request input. The example's
+`BORING_API_TOKEN` hook returns `{ roles, permissions }` for its demonstration
+identity. Its authorization hook delegates to the shared access facade:
+
+```ts
+// In api/+auth.ts, alongside authenticate().
+import type { Context } from "@boringapi/core";
+import { requireAccess } from "../modules/access/facade";
+import type { Actor, AuthorizationRule } from "../modules/access/schemas";
+
+export function authorize(ctx: Context, rule: AuthorizationRule): void {
+    requireAccess(ctx.session as Actor, rule);
+}
+```
+
+The facade's `requireAccess(actor, rule)` calls
+`requirePermissions(actor.permissions, rule)`. The library helper accepts an
+array or a read-only set of granted names, returns normally on success, and
+throws `HttpError(403, "Forbidden")` on denial. Hooks must throw on denial;
+returning `false` does not deny access. Unexpected hook errors remain HTTP 500.
+Any `authorization` declaration already requires a session (HTTP 401 without
+one), so `authentication = true` is redundant on these routes.
+
+The second `authorize()` parameter supplies the route rule type. `boring check`
+checks every route against it, including handlers without a `$types` annotation,
+without executing application modules. With `PermissionRule<Permission>`, it
+rejects misspelled names and invalid combinations. This is static validation;
+startup does not interpret custom rules, and unchecked JavaScript rules are
+validated by the helper when authorization runs.
+
+Business operations call the same access facade, protecting jobs and other
+non-HTTP callers as well. Resource ownership and tenant membership still need
+checks inside the business operation after loading the resource: `orders:read`
+alone does not establish access to a particular order. The bundled orders
+example has no tenant or ownership model.
 
 ## Application modules
 
@@ -125,6 +221,9 @@ app/
 │       ├── +error.404.ts         missing-order response
 │       └── [id]/get.ts           GET /orders/:id
 ├── modules/
+│   ├── access/
+│   │   ├── facade.ts            role grants and shared permission checks
+│   │   └── schemas.ts           permission catalog and actor/rule types
 │   └── orders/
 │       ├── facade.ts            public business operations
 │       └── schemas.ts           public Zod schemas and inferred types
@@ -171,7 +270,8 @@ export type Order = z.infer<typeof order>;
 ```
 
 The example's `createOrders(store)` factory exposes `create({ input, actor })` and
-`get({ id, actor })`. Both require an actor with the `admin` role; `get` throws
+`get({ id, actor })`. They require `orders:create` and `orders:read`, respectively;
+`get` throws
 `HttpError(404, "Order not found")` for an unknown order. These explicit errors are
 handled by the normal Boring API error pipeline. The facade accepts plain values
 and does not depend on an Express request or response. Non-HTTP callers must
@@ -215,7 +315,7 @@ and generators are planned next; they are not available commands yet. See
 - The return value of `GetHandler` or `PostHandler` must match the input of the `output` schema.
 - The return value of `+setup.ts` becomes `ctx.services`.
 - The return value of `authenticate()` becomes `ctx.session`. On protected routes, `session` is not optional.
-- The type of the second `authorize()` parameter limits the permitted values of the `authorization` export.
+- The type of the second `authorize()` parameter limits the permitted values of the `authorization` export. `boring check` also enforces this contract for handlers without generated type annotations.
 - The return values of all inherited `+middleware.ts` files are merged into `ctx.locals`.
 
 Generated files are not committed. There are two ways to make the editor resolve `./$types` in the same way as `boring check`. A simple project can extend the generated configuration from its `tsconfig.json`:
@@ -316,8 +416,9 @@ curl -X POST http://localhost:4040/echo \
 The responses are `{"service":"boring-api","status":"ok"}`, `{"id":"42"}`, and `{"data":{"message":"Hello"}}`. The current scope supports JSON bodies and individual dynamic segments such as `[id]`. Catch-all segments are not defined yet.
 
 To exercise the orders module, set your own `BORING_API_TOKEN` in the shell before
-starting `yarn example:dev`. The example token hook grants the `admin` role to a
-matching bearer token; it is demonstration authentication. Use the same token in
+starting `yarn example:dev`. The example token hook grants the `admin` role and
+its explicit `orders:read` and `orders:create` permissions to a matching bearer
+token; it is demonstration authentication. Use the same token in
 the client shell:
 
 ```bash

@@ -1,5 +1,7 @@
 import { randomUUID } from "crypto";
 import { HttpError } from "../../../../src";
+import { requireAccess } from "../access/facade";
+import type { Actor } from "../access/schemas";
 import type { CreateOrder, Order } from "./schemas";
 
 export interface OrderStore {
@@ -7,24 +9,20 @@ export interface OrderStore {
     find(id: string): Promise<Order | undefined>;
 }
 
-export type OrderActor = { role: string };
-
-function requireAdmin(actor: OrderActor): void {
-    if (actor.role !== "admin") throw new HttpError(403, "Forbidden");
-}
+export type OrderActor = Actor;
 
 /** Public order operations. Dependencies live for the app; actors belong to each call. */
 export function createOrders(store: OrderStore) {
     return {
         async create({ input, actor }: { input: CreateOrder; actor: OrderActor }): Promise<Order> {
-            requireAdmin(actor);
+            requireAccess(actor, "orders:create");
             const order: Order = { id: randomUUID(), item: input.item, quantity: input.quantity };
             await store.insert(order);
             return order;
         },
 
         async get({ id, actor }: { id: string; actor: OrderActor }): Promise<Order> {
-            requireAdmin(actor);
+            requireAccess(actor, "orders:read");
             const order = await store.find(id);
             if (!order) throw new HttpError(404, "Order not found");
             return order;

@@ -26,6 +26,7 @@ Boring API maps filesystem conventions to HTTP routes and cross-cutting behavior
 - Return a service object from `+setup`, a session from `authenticate`, and a locals object from middleware so type generation can expose `ctx.services`, `ctx.session`, and `ctx.locals`. Preserve support for imperative Map writes as an untyped escape hatch.
 - Apply input schemas before the handler and the output schema before the envelope. Input failures are 400; output failures are 500.
 - A route declaring `authentication` or `authorization` requires a session. Authorization denial should throw `HttpError(403, "Forbidden")`; unexpected errors should remain server errors.
+- Prefer typed permission rules in consumers: a permission string, non-empty `allOf`, or non-empty `anyOf`. Roles explicitly bundle permissions; business operations enforce them too. Keep the library's custom `authorize(ctx, rule)` contract compatible.
 - A nearest `+envelope.ts` wraps every successful payload by default. A route can set `envelope = false` to opt out. Empty 204 responses have no envelope.
 - Do not embed passwords, tokens, or fake production integrations in examples. The example bearer-token hook is demonstration code controlled by `BORING_API_TOKEN`.
 - Reject ambiguous routes and invalid convention files at startup rather than silently ignoring them.

@@ -49,6 +49,26 @@ new and recreated directories. Validation: `yarn example:check`, `yarn typecheck
 `yarn test` (26 passing tests) and `yarn build` all passed. Module import boundaries
 remain the next step, not an already enforced guarantee.
 
+## Permission authorization (before step 2)
+
+Status: complete (2026-09-19).
+
+- Added the reusable `PermissionRule<Permission>` type and
+  `requirePermissions(granted, rule)` helper. Rules are a permission string or a
+  non-empty `allOf`/`anyOf` list; denial throws HTTP 403 and malformed rules remain
+  programming errors. Custom `authorize(ctx, rule)` contracts stay supported.
+- The example's access module owns the typed permission catalog, explicit role
+  grants and shared checks. Authentication returns effective permissions;
+  endpoints and the orders facade require `orders:read` or `orders:create`.
+- `boring check` validates authorization exports against the hook's rule type
+  even when handlers omit generated type annotations, without executing modules.
+- Updated the README and consumer agent workflow. Verified allowed and denied
+  requests, combined rules, role unions, request isolation, non-HTTP access,
+  invalid rules and compatibility with custom authorization contracts.
+
+Validation: `yarn example:check`, `yarn typecheck`, `yarn test` (34 passing tests)
+and `yarn build` all passed. Step 2 remains planned.
+
 ## 2. Enforce architecture boundaries with `boring check`
 
 Status: planned.

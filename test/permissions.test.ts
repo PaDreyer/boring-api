@@ -1,0 +1,57 @@
+import assert from "node:assert/strict";
+import { it } from "node:test";
+import { HttpError, PermissionRule, requirePermissions } from "../src";
+import { permissionsForRoles, requireAccess, Role } from "../examples/basic/modules/access/facade";
+
+it("checks exact permissions and explicit allOf/anyOf rules", () => {
+    const reader = ["orders:read"];
+    const both = new Set(["orders:read", "orders:create"]);
+    assert.doesNotThrow(() => requirePermissions(reader, "orders:read"));
+    assert.doesNotThrow(() => requirePermissions(both, { allOf: ["orders:read", "orders:create"] }));
+    assert.doesNotThrow(() => requirePermissions(reader, { anyOf: ["orders:create", "orders:read"] }));
+    assert.doesNotThrow(() => requirePermissions(["orders:create"], { anyOf: ["orders:create", "orders:read"] }));
+
+    for (const rule of ["orders:create", { allOf: ["orders:read", "orders:create"] }] as const) {
+        assert.throws(() => requirePermissions(reader, rule), { status: 403, message: "Forbidden" });
+    }
+    for (const rule of ["orders:read", { allOf: ["orders:read"] }, { anyOf: ["orders:read", "orders:create"] }] as const) {
+        assert.throws(() => requirePermissions([], rule), { status: 403, message: "Forbidden" });
+    }
+    for (const grants of [["admin"], ["*"], ["orders:*"], ["orders:reader"]]) {
+        assert.throws(() => requirePermissions(grants, "orders:read"), { status: 403 });
+    }
+    assert.deepEqual(reader, ["orders:read"]);
+    assert.deepEqual([...both], ["orders:read", "orders:create"]);
+});
+
+it("rejects malformed permission rules as programming errors, even with sufficient grants", () => {
+    const invalid: unknown[] = [
+        undefined, null, false, "", " ", [], ["orders:read"], {},
+        { allOf: [] }, { anyOf: [] }, { allOf: new Array(1) },
+        { allOf: ["orders:read", ""] }, { anyOf: ["orders:read", 42] },
+        { allOf: "orders:read" }, { anyOf: { allOf: ["orders:read"] } },
+        { allOf: ["orders:read"], anyOf: ["orders:read"] },
+        { allOf: ["orders:read"], anyOf: undefined },
+        { allOf: ["orders:read"], extra: true },
+    ];
+    for (const rule of invalid) {
+        assert.throws(() => requirePermissions(["orders:read"], rule as PermissionRule), error =>
+            error instanceof TypeError && !(error instanceof HttpError));
+    }
+});
+
+it("unions explicit role grants without sharing request permissions or granting implicit access", () => {
+    assert.deepEqual(permissionsForRoles([]), []);
+    assert.deepEqual(permissionsForRoles(["viewer"]), ["orders:read"]);
+    assert.deepEqual(permissionsForRoles(["creator"]), ["orders:create"]);
+    assert.deepEqual(permissionsForRoles(["viewer", "creator", "viewer"]), ["orders:read", "orders:create"]);
+    assert.deepEqual(permissionsForRoles(["admin"]), ["orders:read", "orders:create"]);
+    const first = permissionsForRoles(["viewer"]);
+    first.push("orders:create");
+    assert.deepEqual(permissionsForRoles(["viewer"]), ["orders:read"]);
+    for (const role of ["unknown", "toString", "__proto__"]) {
+        assert.throws(() => permissionsForRoles([role as Role]), /Unknown role/);
+    }
+    const namedAdmin = { role: "admin", permissions: [] };
+    assert.throws(() => requireAccess(namedAdmin, "orders:read"), { status: 403 });
+});

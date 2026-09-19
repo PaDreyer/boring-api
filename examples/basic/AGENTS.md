@@ -12,7 +12,13 @@ repository's AGENTS.md also applies while editing this bundled example.
    service or access its storage from an endpoint.
 3. Reuse Zod schemas and infer types from them. Route files import method-specific
    handlers from `./$types`; never edit generated files.
-4. Verify success, failure and permission behavior, then run the repository's
+4. Read `modules/access/schemas.ts` for the permission catalog and
+   `modules/access/facade.ts` for role grants and `requireAccess`. Declare the
+   required permission in the endpoint's `authorization` export and check it
+   again in the business operation. Reuse existing names; add new permissions
+   and role grants explicitly. Use `allOf`/`anyOf` with `as const` for multiple
+   requirements; never use a bare array or check a role name in an endpoint.
+5. Verify success, failure and permission behavior, then run the repository's
    `yarn example:check`, `yarn typecheck`, `yarn test` and `yarn build` commands.
    In a standalone consumer, use its own `boring check` script and test/build commands.
 

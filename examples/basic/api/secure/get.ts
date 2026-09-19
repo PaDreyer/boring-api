@@ -1,6 +1,7 @@
 import type { GetHandler } from "./$types";
 
-export const authentication = true;
-export const authorization = "admin";
+export const authorization = {
+    anyOf: ["orders:read", "orders:create"],
+} as const;
 
-export const handler: GetHandler = ctx => ({ role: ctx.session.role });
+export const handler: GetHandler = ctx => ({ permissions: ctx.session.permissions });

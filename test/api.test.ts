@@ -143,6 +143,43 @@ describe("example API", () => {
     });
 });
 
+describe("permission authorization", () => {
+    let server: Server;
+    before(async () => { server = await listen(join(__dirname, "fixtures", "permissions")); });
+    after(async () => { if (server) await close(server); });
+
+    it("requires a session and enforces each rule before the handler", async () => {
+        const cases = [
+            { method: "GET", path: "/orders", reader: 200, creator: 403 },
+            { method: "POST", path: "/orders", reader: 403, creator: 200 },
+            { method: "GET", path: "/all", reader: 403, creator: 403 },
+            { method: "GET", path: "/any", reader: 200, creator: 200 },
+        ];
+        for (const route of cases) {
+            assert.equal((await request(server, route.method, route.path)).status, 401);
+            for (const [identity, status] of [
+                ["reader", route.reader], ["creator", route.creator], ["both", 200], ["neither", 403],
+            ] as const) {
+                const response = await request(server, route.method, route.path, undefined, { authorization: identity });
+                assert.equal(response.status, status, `${identity}: ${route.method} ${route.path}`);
+                if (status === 403) assert.deepEqual(response.body, { error: { message: "Forbidden" } });
+            }
+        }
+    });
+
+    it("keeps concurrent permission grants isolated", async () => {
+        const responses = await Promise.all(["reader", "creator", "both", "neither"].map(identity =>
+            request(server, "GET", "/orders", undefined, { authorization: identity })));
+        assert.deepEqual(responses.map(response => response.status), [200, 403, 200, 403]);
+    });
+
+    it("preserves unexpected authorization errors as server errors", async () => {
+        const response = await request(server, "GET", "/orders", undefined, { authorization: "failure" });
+        assert.equal(response.status, 500);
+        assert.deepEqual(response.body, { error: { message: "Internal Server Error" } });
+    });
+});
+
 describe("async hooks and request isolation", () => {
     let server: Server;
     before(async () => { server = await listen(join(__dirname, "fixtures", "endpoints")); });

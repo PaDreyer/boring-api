@@ -11,8 +11,12 @@ database, React SPA and server-rendered order pages.
   The facade decides what runs inside one transaction, including audit records.
 - Setup owns dependency construction. Infrastructure never calls business
   operations. Add external SDKs behind this same boundary, not in routes or pages.
+  Import adapters/configuration via `$infra/<path>` and public module entries via
+  `$modules/<name>/...`. The migration script preloads `register-source.ts` so its
+  own imports use the same source compiler as the API.
 - Use `web/client/api.ts` for browser requests, `ApiError` for HTTP failures and
-  public schemas for form validation. Generated `$client` imports are type-only;
+  public schemas for form validation. Import generated `ApiRoutes` with
+  `import type { ApiRoutes } from "$client"`;
   never import the server entry point or a facade into browser source.
 - Keep presentation under `web/server`. Pages take injected facades and explicit
   actors; they validate inputs and escape HTML. They do not access storage.

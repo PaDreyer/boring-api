@@ -1,11 +1,7 @@
-import { join } from "node:path";
-import { registerTypeScript } from "../../src/register";
-
-if (__filename.endsWith(".ts")) registerTypeScript(join(__dirname, "api"), join(__dirname, "../../tsconfig.fullstack.json"));
+import { createDatabase } from "$infra/db/database";
+import { databaseUrl } from "$infra/config";
 
 async function main() {
-    const { createDatabase } = await import("./infra/db/database");
-    const { databaseUrl } = await import("./infra/config");
     const database = createDatabase({ connectionString: databaseUrl() });
     try { await database.migrate(); console.info("Database migrations applied."); }
     finally { await database.close(); }

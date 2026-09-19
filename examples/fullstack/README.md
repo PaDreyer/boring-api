@@ -64,6 +64,14 @@ library imports. Extend `.boring/tsconfig.json`, enable `jsx: "react-jsx"`, and
 map Vite's `$modules` alias to this application's modules directory. The browser
 subpath resolves directly from the installed package, so its repository-specific
 Vite alias is unnecessary.
+Import the generated route contract with `import type { ApiRoutes } from "$client"`.
+The generated TypeScript configuration supplies this alias; Vite needs no alias
+for it because type imports are erased. When adding your own TypeScript `paths`,
+preserve the generated `$modules/*`, `$infra/*` and `$client` mappings.
+Setup and the migration script import database adapters and configuration through
+`$infra/db/database` and `$infra/config`. The source migration command preloads
+`register-source.ts` before compiling its entry script. The compiled migration
+runs directly with Node; the build has rewritten its aliases to relative paths.
 
 ## Storage and boundaries
 

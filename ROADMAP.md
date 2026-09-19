@@ -277,7 +277,12 @@ The browser-safe `@boringapi/core/client` entry point provides typed requests,
 query/path encoding, cancellation and HTTP errors without server dependencies.
 When `web/client` exists, source analysis generates standalone `$client` contracts
 from route schemas and effective envelopes. Generated declarations do not import
-application modules. `web/server` is included in mandatory architecture analysis;
+application modules. The fixed type-only `$client` alias is included in generated
+editor paths, checked against consumer overrides and relocated in built declarations.
+The `$infra/<path>` shortcut follows the same editor/source/build resolution as
+`$modules`, including literal loaders, declaration references, traversal rejection
+and mandatory architecture checks. Both examples and the migration entry use it.
+`web/server` is included in mandatory architecture analysis;
 `BORING109` rejects storage/SDK imports and reverse dependencies on presentation.
 Client regression coverage also exercises real HTTP and generated compiler
 contracts for nonempty bracket-encoded query arrays, conditional/imperative
@@ -290,11 +295,13 @@ envelope overloads. Without an output schema or a single envelope call signature
 client output stays unknown; explicit output schemas and envelope opt-outs retain
 their concrete contracts.
 
-Validation: `yarn example:check`, `yarn typecheck`, `yarn test` (106 passing tests,
+Validation: `yarn example:check`, `yarn typecheck`, `yarn test` (111 passing tests,
 none skipped), `yarn build`,
 `yarn example:build`, `yarn example:fullstack:check` and
-`yarn example:fullstack:build` passed after the envelope audit fixes. The complete
-suite passed with the standard test command and unchanged timeouts.
+`yarn example:fullstack:build` passed, including the envelope fixes and `$client`/
+`$infra` aliases. The complete suite passed with the standard test command and
+unchanged timeouts. Source and compiled migration commands also passed against
+the isolated database; dev reloads exercise aliased infrastructure dependencies.
 The PostgreSQL integration ran against
 an isolated PostgreSQL 17 instance and covers migration locking/checksums,
 persistence, atomic rollback, shared API/page results, validation and permissions.

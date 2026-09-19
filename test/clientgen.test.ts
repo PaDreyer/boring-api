@@ -20,7 +20,7 @@ function consumer(files: Record<string, string>, run: (root: string) => void | P
             "tsconfig.json": JSON.stringify({ compilerOptions: {
                 strict: true, skipLibCheck: true, esModuleInterop: true, target: "ES2020", module: "commonjs",
                 baseUrl: ".", paths: { "@boringapi/core": [join(repository, "src/index.ts")],
-                    "@boringapi/core/client": [join(repository, "src/client.ts")], zod: [join(repository, "node_modules/zod")] },
+                    "@boringapi/core/client": [join(repository, "src/client.ts")], "$client": [".boring/types/api/$client.d.ts"], zod: [join(repository, "node_modules/zod")] },
             } }),
             "modules/orders/schemas.ts": `import z from "zod";
                 export const input = z.object({ item: z.string(), quantity: z.string().transform(Number) });
@@ -33,7 +33,7 @@ function consumer(files: Record<string, string>, run: (root: string) => void | P
             "api/orders/[id]/get.ts": `import { output } from "../../../modules/orders/schemas";
                 export { output }; export const handler = () => { throw new Error("not executed"); };`,
             "web/client/api.ts": `import { createClient } from "@boringapi/core/client";
-                import type { ApiRoutes } from "../../api/$client";
+                import type { ApiRoutes } from "$client";
                 export const api = createClient<ApiRoutes>("/api");
                 async function verify() {
                     const result = await api.request("POST /orders", { body: { item: "Book", quantity: "2" } });
@@ -105,7 +105,7 @@ it("describes effective envelopes and preserves the explicit opt-out", () => {
         "api/+envelope.ts": 'export const handler = () => ({ data: "wrapped", version: 1 });',
         "api/plain/get.ts": 'import z from "zod"; export const envelope = false; export const output = z.boolean(); export const handler = () => true;',
         "web/client/api.ts": `import { createClient } from "@boringapi/core/client";
-            import type { ApiRoutes } from "../../api/$client";
+            import type { ApiRoutes } from "$client";
             const api = createClient<ApiRoutes>();
             async function verify() {
                 const wrapped: { data: string; version: number } = await api.request("GET /orders/:id", { params: { id: "1" } });
@@ -125,7 +125,7 @@ it("keeps empty handlers without output schemas unknown even under an envelope",
             export const handler: GetHandler = ctx => { ctx.payload = { id: "one" }; };`,
         "api/declared/get.ts": 'import z from "zod"; export const output = z.undefined(); export const handler = () => undefined;',
         "web/client/api.ts": `import { createClient } from "@boringapi/core/client";
-            import type { ApiRoutes } from "../../api/$client";
+            import type { ApiRoutes } from "$client";
             const api = createClient<ApiRoutes>();
             async function verify() {
                 // @ts-expect-error An empty handler can finish with 204 before the envelope runs.
@@ -171,7 +171,7 @@ it("keeps overloaded envelopes unknown across synchronous and asynchronous branc
         "api/async/named/get.ts": 'import z from "zod"; export const output = z.object({ name: z.string() }); export const handler = () => ({ name: "one" });',
         "api/async/counted/get.ts": 'import z from "zod"; export const output = z.object({ count: z.number() }); export const handler = () => ({ count: 1 });',
         "web/client/api.ts": `import { createClient } from "@boringapi/core/client";
-            import type { ApiRoutes } from "../../api/$client";
+            import type { ApiRoutes } from "$client";
             const api = createClient<ApiRoutes>();
             async function verify() {
                 // @ts-expect-error A single overload cannot describe all responses from the envelope.
@@ -201,12 +201,39 @@ it("still rejects server dependencies and disallows runtime imports of generated
     consumer({
         "web/client/bad.ts": `import { BoringApi } from "@boringapi/core";
             import { handler } from "../../api/orders/post";
-            import { ApiRoutes } from "../../api/$client";
+            import { ApiRoutes } from "$client";
             export { BoringApi, handler };`,
     }, root => {
         const project = analyzeProject(root, "api");
         assert.equal(project.architecture.filter(error => error.code === "BORING105").length, 2);
         assert.ok(project.architecture.some(error => error.code === "BORING104"));
+    });
+});
+
+it("rejects missing, redirected and invalid $client editor mappings", () => {
+    consumer({
+        "web/client/api.ts": 'import type { ApiRoutes } from "$client"; export type Routes = ApiRoutes;',
+        "wrong-client.d.ts": 'export type ApiRoutes = {};',
+    }, root => {
+        const file = join(root, "tsconfig.json");
+        const configuration = JSON.parse(readFileSync(file, "utf8"));
+        for (const target of [undefined, ["wrong-client.d.ts"]]) {
+            if (target) configuration.compilerOptions.paths.$client = target;
+            else delete configuration.compilerOptions.paths.$client;
+            writeFileSync(file, JSON.stringify(configuration));
+            const project = analyzeProject(root, "api");
+            const errors = project.diagnostics.filter(error => String(error.messageText).includes("BORING108"));
+            assert.equal(errors.length, 1);
+            assert.match(String(errors[0].messageText), /\$client.*selected API/);
+            assert.equal(errors[0].file?.fileName, join(root, "web/client/api.ts"));
+            assert.deepEqual(project.architecture, []);
+            assert.deepEqual(project.program.getCompilerOptions().paths!.$client, [project.clientFile]);
+        }
+        configuration.compilerOptions.paths.$client = [".boring/types/api/$client.d.ts"];
+        writeFileSync(file, JSON.stringify(configuration));
+        clean(analyzeProject(root, "api"));
+        writeFileSync(join(root, "web/client/api.ts"), 'export type Routes = import("$client/anything").ApiRoutes;');
+        assert.ok(analyzeProject(root, "api").diagnostics.some(error => String(error.messageText).includes("Use $client without subpaths")));
     });
 });
 
@@ -218,7 +245,7 @@ it("preserves optional query fields, tuple positions and JSON input restrictions
             export const output = z.object({ nested: z.array(z.object({ value: z.string().nullable() })) });
             export const handler = () => ({ nested: [] });`,
         "web/client/api.ts": `import { createClient } from "@boringapi/core/client";
-            import type { ApiRoutes } from "../../api/$client";
+            import type { ApiRoutes } from "$client";
             const api = createClient<ApiRoutes>();
             api.request("POST /tuples", { body: { tuple: ["a", 2] } });
             api.request("POST /tuples", { body: { tuple: ["a", 2] }, query: { tag: ["x"], limit: 2 } });
@@ -258,7 +285,7 @@ it("uses URL parameter schema inputs before transforms and retains enum restrict
             export const params = z.object({ kind: z.enum(["book", "pen"]), id: z.string().transform(Number) });
             export const output = z.string(); export const handler = () => "ok";`,
         "web/client/api.ts": `import { createClient } from "@boringapi/core/client";
-            import type { ApiRoutes } from "../../api/$client";
+            import type { ApiRoutes } from "$client";
             const api = createClient<ApiRoutes>();
             api.request("GET /kinds/:kind/:id", { params: { kind: "book", id: "2" } });
             // @ts-expect-error Parameter input is a string before the numeric transformation.
@@ -309,7 +336,7 @@ it("matches generated wire contracts to real HTTP for query arrays, envelopes, J
                 return ctx.params.kind === "numeric" ? "123" : ctx.params.kind === "empty" ? "" : "hello";
             };`,
         "web/client/api.ts": `import { createClient } from "@boringapi/core/client";
-            import type { ApiRoutes } from "../../api/$client";
+            import type { ApiRoutes } from "$client";
             const api = createClient<ApiRoutes>();
             api.request("GET /query", { query: { tag: [""] } });
             api.request("GET /query", { query: { tag: ["a", "b"], filter: undefined } });

@@ -2,11 +2,12 @@ import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync, statSync, write
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "path";
 
 import { ApiSources, ContractSource, RouteSource, scanApi } from "./conventions";
-import { inside, modulePaths } from "./compiler";
+import { inside, conventionPaths } from "./compiler";
 
 export interface TypegenResult {
     apiDirectory: string;
     generatedRoot: string;
+    clientFile: string;
     files: string[];
     sources: ApiSources;
 }
@@ -214,6 +215,7 @@ export function generateTypes(projectRoot: string, apiDirectory: string): Typege
     const apiPath = childPath(root, api, "API directory");
     const generatedRoot = join(root, ".boring", "types");
     const generatedApiRoot = join(generatedRoot, apiPath);
+    const clientFile = join(generatedApiRoot, "$client.d.ts");
     childPath(generatedRoot, generatedApiRoot, "Generated types directory");
     const tree = scanApi(api);
 
@@ -253,8 +255,8 @@ export function generateTypes(projectRoot: string, apiDirectory: string): Typege
     writeFileSync(join(root, ".boring", "tsconfig.json"), `${JSON.stringify({
         // TS 4.9 resolves paths without baseUrl, but its import-path completions
         // still require it. Keep generated targets relative to the project root.
-        compilerOptions: { baseUrl: "..", rootDirs: ["..", "./types"], paths: modulePaths(api, root) },
+        compilerOptions: { baseUrl: "..", rootDirs: ["..", "./types"], paths: conventionPaths(api, clientFile, root) },
     }, null, 2)}\n`);
 
-    return { apiDirectory: api, generatedRoot, files, sources: tree };
+    return { apiDirectory: api, generatedRoot, clientFile, files, sources: tree };
 }

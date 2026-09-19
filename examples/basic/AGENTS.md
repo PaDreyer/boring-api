@@ -21,6 +21,7 @@ repository's AGENTS.md also applies while editing this bundled example.
    to preserve inferred service, session and locals return types. Import public schemas
    with `$modules/<name>/schemas` and facades with `$modules/<name>/facade`
    where the import boundaries permit them. Keep same-module imports relative.
+   Import infrastructure in setup with `$infra/<path>`.
 4. Read `modules/access/schemas.ts` for the permission catalog and
    `modules/access/facade.ts` for role grants and `requireAccess`. Declare the
    required permission in the endpoint's `authorization` export and check it
@@ -87,7 +88,7 @@ and explicit setup wiring; generators never replace existing files.
 `yarn example:build` compiles the example with `tsconfig.example.json` into
 `.boring/example-build`, including its relative imports of the local library.
 The compiled entry is `examples/basic/server.js` within that output directory.
-Standalone consumers use `boring build`; plain `tsc` does not rewrite `$modules`.
+Standalone consumers use `boring build`; plain `tsc` does not rewrite `$modules` or `$infra`.
 For IDE support, extend `.boring/tsconfig.json` or preserve its alias mapping
 when using your own `paths`. Custom TypeScript servers/tests register the source
 compiler from `@boringapi/core/register` before importing application modules.

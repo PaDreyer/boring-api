@@ -1,6 +1,6 @@
 import type { SetupContext } from "./$types";
-import { createDatabase } from "../infra/db/database";
-import { databaseUrl } from "../infra/config";
+import { createDatabase } from "$infra/db/database";
+import { databaseUrl } from "$infra/config";
 import { createOrders } from "$modules/orders/facade";
 import { createAccess } from "$modules/access/facade";
 import { createPages } from "../web/server/pages";

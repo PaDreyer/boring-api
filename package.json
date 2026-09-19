@@ -54,7 +54,7 @@
     "example:fullstack:check": "ts-node src/cli.ts check examples/fullstack/api --project tsconfig.fullstack.json",
     "example:fullstack:dev": "ts-node src/cli.ts dev examples/fullstack/api --port 4041 --project tsconfig.fullstack.json",
     "example:fullstack:web": "vite --config examples/fullstack/web/vite.config.mjs",
-    "example:fullstack:migrate": "ts-node --project tsconfig.fullstack.json examples/fullstack/migrate.ts",
+    "example:fullstack:migrate": "ts-node --project tsconfig.fullstack.json -r ./examples/fullstack/register-source.ts examples/fullstack/migrate.ts",
     "example:fullstack:build": "ts-node src/cli.ts build examples/fullstack/api --project tsconfig.fullstack.json && vite build --config examples/fullstack/web/vite.config.mjs",
     "example:fullstack:start": "node .boring/fullstack-build/examples/fullstack/server.js",
     "build": "node scripts/build.js",

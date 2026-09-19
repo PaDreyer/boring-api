@@ -109,7 +109,7 @@ The generated application contains a public health endpoint backed by a shared
 schema and facade, a typed `+setup`, an infrastructure directory, a compiled HTTP
 test, a README and consumer `AGENTS.md`. Package scripts cover dev, sync, inspect,
 check, build, test and start. The TypeScript configuration extends the generated
-`.boring/tsconfig.json` for `$modules` and `./$types`; `.boring`, dependencies and
+`.boring/tsconfig.json` for `$modules`, `$infra`, `$client` and `./$types`; `.boring`, dependencies and
 build output are ignored by Git. Run the sync script after a fresh checkout.
 Dev watches the API and its sibling modules, infrastructure and web source.
 
@@ -192,6 +192,17 @@ always names the `modules/` directory beside the selected API directory:
 can stay relative. The shortcut does not grant access to another module's
 private files or let endpoints import facades directly.
 
+Use `$infra/<path>` for adapters and configuration in the sibling `infra/`
+directory. For example, `boring dev src/http` resolves `$infra/db/database` to
+`src/infra/db/database`. Setup and business modules can use it where the import
+boundaries allow infrastructure; routes, browser code, shared schemas and server
+pages cannot use the shortcut to bypass those boundaries.
+
+```ts
+import { createDatabase } from "$infra/db/database";
+import { databaseUrl } from "$infra/config";
+```
+
 Run `boring sync src/api` once after a fresh checkout and extend the generated
 configuration. For an application under `src/`:
 
@@ -220,17 +231,19 @@ your editor to prefer non-relative imports if it should always suggest the
 shortcut. The same configuration supports the generated `./$types` imports.
 
 An application's own `paths` object replaces inherited mappings. Preserve the
-generated `$modules/*` entry when adding other aliases; targets are relative to
-the effective `baseUrl`. `check`, `inspect` and `build` report `BORING108` at
+generated `$modules/*`, `$infra/*` and `$client` entries when adding other aliases; targets
+are relative to the effective `baseUrl`. `check`, `inspect` and `build` report `BORING108` at
 affected imports if the editor would resolve the shortcut differently. Custom
-aliases still need their own runtime/build support: only `$modules/` is rewritten.
+aliases still need their own runtime/build support: runtime imports are rewritten
+for `$modules/` and `$infra/`. The type-only `$client` shortcut is erased from JavaScript
+and relocated to the generated contract in declaration output.
 One generated configuration describes one selected application; separate
 applications should have separate consumer project roots/configurations.
 
 `boring build src/api` runs the same mandatory checks as `boring check`, then
 compiles the application to CommonJS. It uses the project's `rootDir` and
 `outDir`, defaulting to the API's parent directory and `<project>/dist`.
-The build rewrites `$modules` imports, re-exports, literal dynamic imports and
+The build rewrites `$modules` and `$infra` imports, re-exports, literal dynamic imports and
 CommonJS requires to relative file paths. These paths follow TypeScript's emitted
 extensions, including `.jsx` with `jsx: "preserve"`. Declaration output also
 receives resolved paths, including nested import types, and the generated handler
@@ -270,10 +283,12 @@ TypeScript test files outside the application's source directory also need their
 test runner's TypeScript support, for example
 `node --test -r ts-node/register -r ./test/register.cjs test/*.test.ts`.
 Use relative imports from those tests into the application; the registered
-compiler handles `$modules` inside application source. The registration accepts an
+compiler handles `$modules` and `$infra` inside application source. The registration accepts an
 optional second argument naming a TypeScript configuration file and is scoped to
 the API's parent directory. Use an absolute API path. Run `boring check` separately
 for source type and architecture checks. Compiled applications need no registration.
+If the entry script itself uses these aliases, preload the registration before
+the script is compiled, as the fullstack migration command does.
 
 ## Adding a route
 
@@ -476,7 +491,7 @@ The setup hook supplies the storage implementation:
 
 ```ts
 // api/+setup.ts
-import { createMemoryStore } from "../infra/memoryStore";
+import { createMemoryStore } from "$infra/memoryStore";
 import { createOrders } from "$modules/orders/facade";
 import type { Order } from "$modules/orders/schemas";
 
@@ -561,12 +576,13 @@ workflow, HTTP examples and database test instructions.
 When a sibling `web/client` directory exists, `boring sync`, `check`, `inspect`,
 `dev` and `build` also generate a virtual `$client.d.ts` at the API root. Like
 `$types`, it is stored under `.boring/types` and is never edited or committed.
-Use the consumer's generated editor configuration so the virtual import resolves:
+The fixed `$client` shortcut resolves to that contract from any source directory.
+Use the consumer's generated editor configuration so the import resolves:
 
 ```ts
 // web/client/api.ts
 import { createClient } from "@boringapi/core/client";
-import type { ApiRoutes } from "../../api/$client";
+import type { ApiRoutes } from "$client";
 
 export const api = createClient<ApiRoutes>("/api"); // mount prefix, or ""
 const created = await api.request("POST /orders", {
@@ -664,7 +680,7 @@ Diagnostics have stable codes and source locations:
 | `BORING105` | Browser code or shared schemas import server code. |
 | `BORING106` | Unresolved dependency or unsupported module loader/path. |
 | `BORING107` | Dependency outside the application structure or misplaced module file. |
-| `BORING108` | Invalid `$modules` path or an editor alias mapping that differs from the application convention. |
+| `BORING108` | Invalid `$modules`/`$infra`/`$client` path or an editor alias mapping that differs from the application convention. |
 | `BORING109` | Server page imports infrastructure/SDKs, or server code outside setup imports pages. |
 
 For endpoint violations, diagnostics also list callable operations inferred from
@@ -846,14 +862,19 @@ settings instead. For an API at `api/` and modules at `modules/`:
   "compilerOptions": {
     "baseUrl": ".",
     "rootDirs": [".", ".boring/types"],
-    "paths": { "$modules/*": ["modules/*"] }
+    "paths": {
+      "$modules/*": ["modules/*"],
+      "$infra/*": ["infra/*"],
+      "$client": [".boring/types/api/$client.d.ts"]
+    }
   }
 }
 ```
 
-For `src/api`, use `src/modules/*`. Merge this entry with any other explicit
+For `src/api`, use `src/modules/*`, `src/infra/*` and `.boring/types/src/api/$client.d.ts`.
+Merge these mappings with any other explicit
 `paths` entries. The generated configuration is refreshed by `sync`, `dev`,
-`check`, `inspect` and `build`. Checks set `rootDirs` themselves; `$modules`
+`check`, `inspect` and `build`. Checks set `rootDirs` themselves; convention alias
 imports additionally require matching editor settings as described above.
 The API directory must be inside the project because its location is mapped to the generated `.boring/types` directory.
 
@@ -896,7 +917,7 @@ yarn test
 yarn build           # compile only the library into dist
 ```
 
-The example keeps an explicit `$modules/*` entry in the repository's tsconfig
+The example keeps explicit `$modules/*` and `$infra/*` entries in the repository's tsconfig
 because the repository also generates types for independent test applications.
 `tsconfig.example.json` selects its application build. Run the compiled example
 with `node .boring/example-build/examples/basic/server.js`.

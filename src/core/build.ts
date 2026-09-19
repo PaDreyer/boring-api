@@ -41,7 +41,7 @@ export function buildProject(project: AnalyzedProject): { diagnostics: readonly 
         }
     }
     const options: ts.CompilerOptions = {
-        ...compilerOptions(configured, project.apiDirectory), module: ts.ModuleKind.CommonJS,
+        ...compilerOptions(configured, project.apiDirectory, project.clientFile), module: ts.ModuleKind.CommonJS,
         rootDir, outDir, noEmit: false, noEmitOnError: true, allowJs: true,
         rootDirs: project.program.getCompilerOptions().rootDirs,
     };

@@ -1,5 +1,5 @@
 import type { SetupContext } from "./$types";
-import { createMemoryStore } from "../infra/memoryStore";
+import { createMemoryStore } from "$infra/memoryStore";
 import { createOrders } from "$modules/orders/facade";
 import type { Order } from "$modules/orders/schemas";
 

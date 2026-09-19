@@ -14,7 +14,7 @@ export function analyzeProject(root: string, apiDirectory: string, projectFile?:
     const configuration = readConfiguration(root, projectFile);
     const fileNames = [...new Set([...configuration.fileNames, ...architectureFiles(generated.apiDirectory), ...generated.files])];
     const options: ts.CompilerOptions = {
-        ...compilerOptions(configuration.options, generated.apiDirectory),
+        ...compilerOptions(configuration.options, generated.apiDirectory, generated.clientFile),
         noEmit: true,
         allowJs: true,
         rootDir: undefined,
@@ -23,7 +23,7 @@ export function analyzeProject(root: string, apiDirectory: string, projectFile?:
 
     let program = ts.createProgram({ rootNames: fileNames, options });
     if (existsSync(join(dirname(generated.apiDirectory), "web", "client"))) {
-        const client = generateClientContracts(root, generated, program);
+        const client = generateClientContracts(generated, program);
         generated.files.push(client);
         fileNames.push(client);
         program = ts.createProgram({ rootNames: fileNames, options, oldProgram: program });

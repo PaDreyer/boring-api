@@ -6,7 +6,8 @@
     "baseUrl": ".",
     "paths": {
       "@boringapi/core": ["src/index.ts"],
-      "$modules/*": ["examples/basic/modules/*"]
+      "$modules/*": ["examples/basic/modules/*"],
+      "$infra/*": ["examples/basic/infra/*"]
     },
     "rootDirs": [".", ".boring/types"],
     "rootDir": "src",

@@ -89,6 +89,7 @@ it("initializes default and nested consumers with typed hooks, editor shortcuts 
         assert.match(readFileSync(join(root, api, "+setup.ts"), "utf8"), /SetupContext.*from "\.\/\$types"/);
         const editor = JSON.parse(readFileSync(join(root, ".boring/tsconfig.json"), "utf8"));
         assert.deepEqual(editor.compilerOptions.paths["$modules/*"], [api === "api" ? "modules/*" : "src/modules/*"]);
+        assert.deepEqual(editor.compilerOptions.paths["$infra/*"], [api === "api" ? "infra/*" : "src/infra/*"]);
         const built = buildProject(project);
         assert.deepEqual(built.diagnostics, []);
         assert.ok(existsSync(join(built.output, api === "api" ? "api/health/get.js" : "http/health/get.js")));
@@ -184,7 +185,7 @@ it("requires compatible explicit templates and creates a typed 501 adapter when 
 
 it("rolls back a new adapter if it invalidates an existing typed envelope", () => {
     const root = fixture();
-    write(root, "web/client/api.ts", 'import type { ApiRoutes } from "../../api/$client"; export type Routes = ApiRoutes;');
+    write(root, "web/client/api.ts", 'import type { ApiRoutes } from "$client"; export type Routes = ApiRoutes;');
     write(root, "api/+envelope.ts", 'import type { EnvelopeContext } from "./$types"; export const handler = (ctx: EnvelopeContext) => ctx.payload.status;');
     checked(root);
     const before = readFileSync(join(root, "api/+envelope.ts"), "utf8");

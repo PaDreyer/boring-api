@@ -133,7 +133,7 @@ it("serves the health contract", async () => {
    per-call actors; enforce business permissions inside the operation as well as
    in the endpoint. Keep request state out of shared services.
 6. \`${infra}/\` owns storage and external clients. Wire dependencies once in
-   \`${api}/+setup.ts\`, import factories through \`$modules/<name>/facade\` and
+   \`${api}/+setup.ts\`, import adapters through \`$infra/<path>\`, factories through \`$modules/<name>/facade\` and
    return services. Do not expose raw storage to routes. Use relative same-module imports.
 7. Hooks use generated \`SetupContext\`, \`AuthenticationContext\`,
    \`AuthorizationContext\`, \`MiddlewareContext\`, \`EnvelopeContext\` or
@@ -145,9 +145,10 @@ it("serves the health contract", async () => {
 
 \`npm run dev\` watches the API and sibling modules, infrastructure and web source. Use
 \`boring build\` via the build script for production; plain tsc does not rewrite
-\`$modules\`. Browser source belongs in \`web/client/\` beside the API and imports
+\`$modules\` or \`$infra\`. Browser source belongs in \`web/client/\` beside the API and imports
 only browser-safe schemas, never server implementations. Use \`@boringapi/core/client\`
-with type-only \`ApiRoutes\` from the API's generated \`$client\` for requests.
+with \`import type { ApiRoutes } from "$client"\` for requests. The generated
+editor configuration resolves \`$client\` to the selected API's contract.
 Server presentation belongs in \`web/server/\`, takes injected facades and never
 imports storage. Keep module dependencies acyclic. Add real integrations behind
 infrastructure; never embed credentials. Keep generated web assets in build output.
@@ -178,7 +179,7 @@ Generators preserve existing files; inspect the generated diff and effective hoo
 
 \`npm run dev\` restarts on changes to \`${api}\`, \`${modules}\`, \`${infra}\` and sibling web source.
 Use \`npm run build\` followed by \`npm start\` for compiled execution. The build
-rewrites \`$modules\` imports and checks types, conventions and architecture first.
+rewrites \`$modules\` and \`$infra\` imports and checks types, conventions and architecture first.
 See AGENTS.md for the ownership and reuse rules.
 `,
     };

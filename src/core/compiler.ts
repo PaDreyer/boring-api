@@ -1,11 +1,22 @@
 import { dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import ts from "typescript";
 
-export const moduleAlias = "$modules/*";
+const directoryAliases: Record<string, string> = { $modules: "modules", $infra: "infra" };
+export const clientAlias = "$client";
 
-export function modulePaths(apiDirectory: string, configDirectory?: string): Record<string, string[]> {
-    const target = join(dirname(apiDirectory), "modules", "*");
-    return { [moduleAlias]: [(configDirectory ? relative(configDirectory, target) : target).split(sep).join("/")] };
+function directoryAlias(specifier: string): string | undefined {
+    return Object.keys(directoryAliases).find(alias => specifier === alias || specifier.startsWith(`${alias}/`) || specifier.startsWith(`${alias}\\`));
+}
+
+function invalidDirectoryPath(specifier: string, alias: string): boolean {
+    return !specifier.startsWith(`${alias}/`) || specifier.slice(alias.length + 1).split(/[\\/]/).some(part => !part || part === "." || part === "..");
+}
+
+export function conventionPaths(apiDirectory: string, clientFile?: string, configDirectory?: string): Record<string, string[]> {
+    const targets = { ...Object.fromEntries(Object.entries(directoryAliases).map(([alias, directory]) =>
+        [`${alias}/*`, join(dirname(apiDirectory), directory, "*")])), ...(clientFile ? { [clientAlias]: clientFile } : {}) };
+    return Object.fromEntries(Object.entries(targets).map(([name, target]) =>
+        [name, [(configDirectory ? relative(configDirectory, target) : target).split(sep).join("/")]]));
 }
 
 export function inside(parent: string, file: string): boolean {
@@ -13,9 +24,10 @@ export function inside(parent: string, file: string): boolean {
     return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
 }
 
-export function compilerOptions(options: ts.CompilerOptions, apiDirectory: string): ts.CompilerOptions {
-    const paths = Object.fromEntries(Object.entries(options.paths ?? {}).filter(([name]) => name !== "$modules" && !name.startsWith("$modules/")));
-    return { ...options, paths: { ...paths, ...modulePaths(apiDirectory) } };
+export function compilerOptions(options: ts.CompilerOptions, apiDirectory: string, clientFile?: string): ts.CompilerOptions {
+    const paths = Object.fromEntries(Object.entries(options.paths ?? {}).filter(([name]) =>
+        !directoryAlias(name) && !(clientFile && (name === clientAlias || name.startsWith(`${clientAlias}/`)))));
+    return { ...options, paths: { ...paths, ...conventionPaths(apiDirectory, clientFile) } };
 }
 
 export function moduleLiteral(node: ts.StringLiteralLike): boolean {
@@ -48,17 +60,22 @@ export function aliasDiagnostics(program: ts.Program, configured: ts.CompilerOpt
     for (const source of program.getSourceFiles()) {
         if (source.isDeclarationFile) continue;
         const visit = (node: ts.Node) => {
-            if (ts.isStringLiteralLike(node) && node.text.startsWith("$modules/") && moduleLiteral(node)) {
+            if (ts.isStringLiteralLike(node) && (directoryAlias(node.text) || node.text === clientAlias || node.text.startsWith(`${clientAlias}/`)) && moduleLiteral(node)) {
+                const alias = directoryAlias(node.text);
+                const client = node.text === clientAlias || node.text.startsWith(`${clientAlias}/`);
                 const expected = resolveImport(node.text, source.fileName, program.getCompilerOptions());
                 const actual = resolveImport(node.text, source.fileName, configured);
-                if (node.text.slice("$modules/".length).split(/[\\/]/).some(part => !part || part === "." || part === "..")) {
+                if (client ? node.text !== clientAlias : invalidDirectoryPath(node.text, alias!)) {
                     diagnostics.push({ category: ts.DiagnosticCategory.Error, code: 98001,
                         file: source, start: node.getStart(source), length: node.getWidth(source),
-                        messageText: "BORING108: Invalid $modules import. Use a module name and file path without traversal segments." });
+                        messageText: client ? "BORING108: Invalid $client import. Use $client without subpaths."
+                            : `BORING108: Invalid ${alias} import. Use ${alias}/<path> without empty or traversal segments.` });
                 } else if (expected && actual?.resolvedFileName !== expected.resolvedFileName) {
                     diagnostics.push({ category: ts.DiagnosticCategory.Error, code: 98001,
                         file: source, start: node.getStart(source), length: node.getWidth(source),
-                        messageText: "BORING108: The editor configuration does not resolve $modules to the API's sibling modules directory. Extend .boring/tsconfig.json, or include its $modules/* mapping in your own compilerOptions.paths. A local paths object replaces inherited paths." });
+                        messageText: client
+                            ? "BORING108: The editor configuration does not resolve $client to the selected API's generated contract. Extend .boring/tsconfig.json, or include its $client mapping in your own compilerOptions.paths. A local paths object replaces inherited paths."
+                            : `BORING108: The editor configuration does not resolve ${alias} to the API's sibling ${directoryAliases[alias!]} directory. Extend .boring/tsconfig.json, or include its ${alias}/* mapping in your own compilerOptions.paths. A local paths object replaces inherited paths.` });
                 }
             }
             ts.forEachChild(node, visit);
@@ -122,10 +139,13 @@ export function importTransformer(settings: ImportTransformOptions): ts.Transfor
         const transformSource = (source: ts.SourceFile): ts.SourceFile => {
             const rewrite = (literal: ts.Expression): ts.Expression => {
                 if (!ts.isStringLiteralLike(literal)) return literal;
-                const alias = literal.text.startsWith("$modules/");
+                const directory = directoryAlias(literal.text);
+                // $client is erased from JavaScript, but declaration output must
+                // resolve it without retaining the consumer's editor configuration.
+                const alias = directory || settings.relocateRelative && literal.text === clientAlias;
                 if (!alias && !(settings.relocateRelative && literal.text.startsWith("."))) return literal;
-                if (alias && literal.text.slice("$modules/".length).split(/[\\/]/).some(part => !part || part === "." || part === "..")) {
-                    throw new Error(`${source.fileName}: BORING108: Invalid $modules import '${literal.text}'.`);
+                if (directory && invalidDirectoryPath(literal.text, directory)) {
+                    throw new Error(`${source.fileName}: BORING108: Invalid ${directory} import '${literal.text}'.`);
                 }
                 const resolved = resolveImport(literal.text, source.fileName, settings.options);
                 if (!resolved) throw new Error(`${source.fileName}: BORING106: Cannot resolve '${literal.text}'.`);

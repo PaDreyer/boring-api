@@ -73,7 +73,7 @@ it("boring dev reloads sibling modules and infra, including newly created direct
         await change(() => {
             mkdirSync(module, { recursive: true });
             writeFileSync(join(module, "facade.js"),
-                'exports.read = () => require("../../infra/store").value;\n');
+                'exports.read = () => require("$infra/store").value;\n');
         }, "initial");
         await change(() => {
             mkdirSync(infra);
@@ -93,7 +93,7 @@ it("boring dev reloads sibling modules and infra, including newly created direct
         }, "changed storage");
         await change(() => {
             writeFileSync(join(module, "facade.js"),
-                'exports.read = () => "facade: " + require("../../infra/store").value;\n');
+                'exports.read = () => "facade: " + require("$infra/store").value;\n');
         }, "facade: changed storage");
 
         const internal = join(module, "internal");

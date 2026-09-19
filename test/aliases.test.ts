@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { it } from "node:test";
@@ -87,7 +87,7 @@ function fixture() {
 function checked(root: string) {
     const project = analyzeProject(root, "app/http");
     assert.equal(project.diagnostics.length, 0, ts.formatDiagnostics(project.diagnostics, formatHost(root)));
-    assert.deepEqual(project.architecture, []);
+    assert.deepEqual(project.architecture.map(error => error.message), []);
     return project;
 }
 
@@ -118,6 +118,139 @@ it("reports editor mappings replaced by consumer paths and preserves unrelated a
     assert.deepEqual(project.program.getCompilerOptions().paths!["@local/*"], ["./app/modules/*"]);
     write(root, "app/http/orders/[id]/get.ts", 'import { read } from "$modules/../modules/orders/internal/read"; export const handler = read;');
     assert.ok(analyzeProject(root, "app/http").diagnostics.some(error => String(error.messageText).includes("BORING108")));
+});
+
+it("resolves $infra in separate source applications and portable runtime/declaration builds", async () => {
+    const first = fixture();
+    const second = fixture();
+    for (const [root, label] of [[first, "first"], [second, "second"]]) {
+        write(root, "app/infra/config.ts", `export const label = "${label}"; export interface Config { label: string; }`);
+        write(root, "app/infra/adapter.ts", `import { label } from "$infra/config";
+            import config = require("$infra/config");
+            export { label } from "$infra/config";
+            export type { Config } from "$infra/config";
+            export type ImportedConfig = import("$infra/config").Config;
+            export const direct = () => label;
+            export const equals = () => config.label;
+            export const lazy = async () => (await import("$infra/config")).label;
+            export const required = () => require("$infra/config").label;
+            export const moduleRequired = () => module.require("$infra/config").label;
+            export const bracketRequired = () => module["require"]("$infra/config").label;
+            export const shadowed = (require: (path: string) => string) => require("$infra/missing");`);
+        checked(root);
+        const configuration = readConfiguration(root);
+        assert.deepEqual(configuration.options.paths!["$infra/*"], ["app/infra/*"]);
+        const editor = ts.createProgram(configuration.fileNames, configuration.options);
+        const diagnostics = ts.getPreEmitDiagnostics(editor);
+        assert.equal(diagnostics.length, 0, ts.formatDiagnostics(diagnostics, formatHost(root)));
+    }
+    const stopFirst = registerTypeScript(join(first, "app/http"));
+    const stopSecond = registerTypeScript(join(second, "app/http"));
+    try {
+        for (const [root, label] of [[first, "first"], [second, "second"]]) {
+            const adapter = require(join(root, "app/infra/adapter.ts"));
+            assert.equal(adapter.label, label);
+            for (const name of ["direct", "equals", "lazy", "required", "moduleRequired", "bracketRequired"]) assert.equal(await adapter[name](), label);
+            assert.equal(adapter.shadowed((path: string) => path), "$infra/missing");
+        }
+    } finally { stopSecond(); stopFirst(); }
+    assert.deepEqual(buildProject(checked(first)).diagnostics, []);
+    renameSync(join(first, "output"), join(first, "deployed"));
+    const emitted = join(first, "deployed/infra/adapter");
+    assert.doesNotMatch(readFileSync(`${emitted}.d.ts`, "utf8"), /\$infra/);
+    const declarations = ts.createProgram([`${emitted}.d.ts`], {
+        strict: true, noEmit: true, target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, esModuleInterop: true,
+    });
+    const diagnostics = ts.getPreEmitDiagnostics(declarations);
+    assert.equal(diagnostics.length, 0, ts.formatDiagnostics(diagnostics, formatHost(first)));
+    assert.ok(!declarations.getSourceFiles().some(file => file.fileName.startsWith(join(first, "app"))));
+    const run = spawnSync(process.execPath, ["-e", `const assert = require("node:assert/strict");
+        const adapter = require("./deployed/infra/adapter.js");
+        (async () => {
+            assert.equal(adapter.label, "first");
+            for (const name of ["direct", "equals", "lazy", "required", "moduleRequired", "bracketRequired"]) assert.equal(await adapter[name](), "first");
+        })().catch(error => { console.error(error); process.exitCode = 1; });`], { cwd: first, encoding: "utf8" });
+    assert.ifError(run.error);
+    assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+});
+
+it("keeps architecture boundaries for $infra imports", () => {
+    const root = fixture();
+    write(root, "app/infra/config.ts", 'export const label = "stored";');
+    for (const file of ["app/http/bad/get.ts", "app/http/+middleware.ts", "app/web/client/bad.ts", "app/web/server/bad.ts", "app/modules/shared/schemas.ts"]) {
+        write(root, file, 'import { label } from "$infra/config"; export const handler = () => label;');
+    }
+    const project = analyzeProject(root, "app/http");
+    for (const [file, code] of [["app/http/bad/get.ts", "BORING101"], ["app/http/+middleware.ts", "BORING101"],
+        ["app/web/client/bad.ts", "BORING105"], ["app/web/server/bad.ts", "BORING109"], ["app/modules/shared/schemas.ts", "BORING105"]]) {
+        assert.ok(project.architecture.some(error => error.file.fileName === join(root, file) && error.code === code), `${file}: ${code}`);
+    }
+});
+
+it("rejects missing, redirected and traversing $infra mappings", () => {
+    const root = fixture();
+    write(root, "app/infra/config.ts", 'export const label = "stored";');
+    const source = join(root, "app/infra/read.ts");
+    writeFileSync(source, 'export { label } from "$infra/config";');
+    const file = join(root, "tsconfig.json");
+    const configuration = JSON.parse(readFileSync(file, "utf8"));
+    configuration.compilerOptions.paths = { "$modules/*": ["app/modules/*"] };
+    for (const redirected of [false, true]) {
+        if (redirected) {
+            configuration.compilerOptions.paths["$infra/*"] = ["app/infra/*"];
+            configuration.compilerOptions.paths["$infra/config"] = ["app/modules/orders/schemas.ts"];
+        }
+        writeFileSync(file, JSON.stringify(configuration));
+        const project = analyzeProject(root, "app/http");
+        const errors = project.diagnostics.filter(error => String(error.messageText).includes("BORING108"));
+        assert.equal(errors.length, 1);
+        assert.equal(errors[0].file?.fileName, source);
+        assert.match(String(errors[0].messageText), /\$infra.*sibling infra/);
+        assert.equal(project.program.getCompilerOptions().paths!["$infra/config"], undefined);
+    }
+    delete configuration.compilerOptions.paths["$infra/config"];
+    writeFileSync(file, JSON.stringify(configuration));
+    checked(root);
+    for (const path of ["$infra", "$infra/../modules/orders/schemas"]) {
+        writeFileSync(source, `export { label } from "${path}";`);
+        assert.ok(analyzeProject(root, "app/http").diagnostics.some(error => String(error.messageText).includes("Invalid $infra import")));
+        const stop = registerTypeScript(join(root, "app/http"));
+        try { assert.throws(() => require(source), /BORING108: Invalid \$infra import/); }
+        finally { stop(); }
+    }
+});
+
+it("resolves $client through generated editor paths and relocates its emitted declarations", () => {
+    const root = fixture();
+    write(root, "app/web/client/api.ts", `import type { ApiRoutes } from "$client";
+        export const label = (order: ApiRoutes["GET /orders/:id"]["output"]): string => order.label;
+        export type Routes = ApiRoutes;
+        export type { ApiRoutes } from "$client";
+        export type ImportedRoutes = import("$client").ApiRoutes;`);
+    write(root, "app/web/client/pages/orders/page.ts", `import type { ApiRoutes } from "$client";
+        export type Order = ApiRoutes["GET /orders/:id"]["output"];
+        export const label = (order: Order): string => order.label;`);
+    const project = checked(root);
+    const configuration = readConfiguration(root);
+    assert.deepEqual(configuration.options.paths!["$client"], [".boring/types/app/http/$client.d.ts"]);
+    const editor = ts.createProgram(configuration.fileNames, configuration.options);
+    const diagnostics = ts.getPreEmitDiagnostics(editor);
+    assert.equal(diagnostics.length, 0, ts.formatDiagnostics(diagnostics, formatHost(root)));
+    assert.equal(ts.resolveModuleName("$client", join(root, "app/web/client/pages/orders/page.ts"), configuration.options, ts.sys)
+        .resolvedModule?.resolvedFileName, project.clientFile);
+
+    assert.deepEqual(buildProject(project).diagnostics, []);
+    renameSync(join(root, "output"), join(root, "deployed"));
+    const api = join(root, "deployed/web/client/api");
+    assert.doesNotMatch(readFileSync(`${api}.js`, "utf8"), /\$client/);
+    assert.doesNotMatch(readFileSync(`${api}.d.ts`, "utf8"), /["']\$client["']/);
+    assert.ok(existsSync(join(root, "deployed/http/$client.d.ts")));
+    const deployed = ts.createProgram([`${api}.d.ts`, join(root, "deployed/web/client/pages/orders/page.d.ts")], {
+        module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, esModuleInterop: true, strict: true, noEmit: true,
+    });
+    const errors = ts.getPreEmitDiagnostics(deployed);
+    assert.equal(errors.length, 0, ts.formatDiagnostics(errors, formatHost(root)));
+    assert.ok(!deployed.getSourceFiles().some(file => file.fileName.startsWith(join(root, "app")) || file.fileName.startsWith(join(root, ".boring"))));
 });
 
 it("provides path/member completion, hover, definitions, rename and alias auto-imports through the ordinary TS language service", () => {

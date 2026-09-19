@@ -1,45 +1,45 @@
 # Boring API
 
-Eine API aus Dateien: Ordner bilden URL-Pfade, `get.ts` und `post.ts` bilden HTTP-Methoden. Dateien mit `+` steuern gemeinsame Aufgaben. Boring API verbindet sie beim Start automatisch, ohne Router-Verschachtelung oder Decorators.
+An API made from files: folders define URL paths, while `get.ts` and `post.ts` define HTTP methods. Files prefixed with `+` control shared behavior. Boring API connects them automatically at startup, without nested routers or decorators.
 
 ```text
 api/
-├── +setup.ts                  Dienste einmalig starten
-├── +auth.ts                   Authentifizierung und Autorisierung
-├── +middleware.ts             Middleware für alle Routen
-├── +envelope.ts               Antwortformat für alle Routen
-├── +error.404.ts              Fehlerdarstellung für HTTP 404
+├── +setup.ts                  initialize services once
+├── +auth.ts                   authentication and authorization
+├── +middleware.ts             middleware for all routes
+├── +envelope.ts               response format for all routes
+├── +error.404.ts              error response for HTTP 404
 └── items/
-    ├── +middleware.ts         zusätzliche Middleware nur für /items/*
+    ├── +middleware.ts         additional middleware for /items/* only
     ├── latest/get.ts          GET /items/latest
     └── [id]/get.ts            GET /items/:id
 ```
 
-Das API-Verzeichnis gehört der Anwendung. Es kann beliebig heißen; die Anwendung übergibt seinen Pfad an Boring API. `src` enthält nur die Bibliothek. Ein ausführbares, getrenntes Beispiel liegt unter `examples/basic`.
+The API directory belongs to the application. It can have any name; the application passes its path to Boring API. `src` contains only the library. A separate, runnable example is available under `examples/basic`.
 
 ## Installation
 
-`@boringapi/core` ist das veröffentlichte Node-Modul. Es installiert den ausführbaren Befehl `boring` über das `bin`-Feld des Pakets:
+`@boringapi/core` is the published Node module. It installs the executable `boring` command through the package's `bin` field:
 
 ```bash
 npm install @boringapi/core zod
-# oder: pnpm add @boringapi/core zod
-# oder: yarn add @boringapi/core zod
+# or: pnpm add @boringapi/core zod
+# or: yarn add @boringapi/core zod
 ```
 
-Nach der lokalen Installation ist der Befehl in den Package-Scripts der Anwendung verfügbar. Er kann außerdem mit `npx boring`, `pnpm exec boring` oder `yarn boring` direkt ausgeführt werden.
+After a local installation, the command is available in the application's package scripts. You can also run it directly with `npx boring`, `pnpm exec boring`, or `yarn boring`.
 
 ## CLI
 
-Die drei normalen Befehle übernehmen Laden, Typgenerierung und Prüfung:
+The three standard commands handle loading, type generation, and validation:
 
 ```bash
-boring dev                 # ./api laden, Typen erzeugen, bei Änderungen neu starten
-boring check               # Typen erzeugen und das Projekt mit TypeScript prüfen
-boring start               # kompilierte API ohne Watcher starten
+boring dev                 # load ./api, generate types, and restart on changes
+boring check               # generate types and check the project with TypeScript
+boring start               # start the compiled API without a watcher
 ```
 
-Das API-Verzeichnis ist standardmäßig `./api`. Ein anderer Pfad kann als Argument oder mit `--dir` angegeben werden. Der Port ist standardmäßig 4040.
+The API directory defaults to `./api`. Pass another path as a positional argument or with `--dir`. The default port is 4040.
 
 ```bash
 boring dev src/api --port 3000
@@ -47,9 +47,9 @@ boring check src/api
 boring start dist/api --port 3000
 ```
 
-`boring dev` lädt TypeScript über `ts-node`, generiert Typen vor jedem Neustart und beobachtet das API-Verzeichnis. `boring check` prüft TypeScript, die Dateikonventionen und die Exportverträge aller Routen und Hooks. `boring start` ist für kompiliertes JavaScript gedacht. `boring sync` erzeugt nur die Typdateien.
+`boring dev` loads TypeScript through `ts-node`, generates types before every restart, and watches the API directory. `boring check` checks TypeScript, file conventions, and the export contracts of every route and hook. `boring start` is intended for compiled JavaScript. `boring sync` only generates the type files.
 
-Diese Scripts gehören in die `package.json` der Anwendung, die Boring API verwendet:
+Add these scripts to the `package.json` of an application that uses Boring API:
 
 ```json
 {
@@ -61,10 +61,10 @@ Diese Scripts gehören in die `package.json` der Anwendung, die Boring API verwe
 }
 ```
 
-### Einbindung in einen vorhandenen Server
+### Integrating with an existing server
 
 ```ts
-// server.ts in der Anwendung des Nutzers
+// server.ts in the consumer application
 import { join } from "path";
 import { BoringApi } from "@boringapi/core";
 
@@ -79,11 +79,11 @@ main().catch(error => {
 });
 ```
 
-`createApp(directory)` liefert eine Express-App. `listen(directory, port)` startet direkt einen HTTP-Server und gibt ihn zurück. `scan(directory, port)` bleibt als älterer Alias erhalten. Der Loader scannt das angegebene Verzeichnis beim Start und verlangt ladbare `.ts`- oder `.js`-Dateien.
+`createApp(directory)` returns an Express application. `listen(directory, port)` starts and returns an HTTP server directly. `scan(directory, port)` remains available as a legacy alias. The loader scans the specified directory at startup and requires loadable `.ts` or `.js` files.
 
-## Eine Route hinzufügen
+## Adding a route
 
-Die Namen `get.ts`, `post.ts`, `put.ts`, `patch.ts`, `delete.ts`, `head.ts` und `options.ts` sind reserviert. Ein `get.ts` direkt in `api/` bedient `GET /`. Ein Ordner `[id]` wird zum URL-Parameter `:id`. Statische Routen gewinnen gegen dynamische. Doppelte oder unbekannte Konventionsdateien brechen den Start ab.
+The names `get.ts`, `post.ts`, `put.ts`, `patch.ts`, `delete.ts`, `head.ts`, and `options.ts` are reserved. A `get.ts` directly inside `api/` handles `GET /`. A folder named `[id]` becomes the `:id` URL parameter. Static routes take precedence over dynamic routes. Duplicate or unknown convention files cause startup to fail.
 
 ```ts
 // api/articles/[id]/get.ts
@@ -108,31 +108,31 @@ export const handler: GetHandler = async ctx => {
 };
 ```
 
-`ArticleStore` bezeichnet hier den Typ eines anwendungseigenen Dienstes. Er wird in `+setup.ts` registriert. Für eine direkt kopierbare Demo siehe `examples/basic/api`.
+Here, `ArticleStore` represents the type of an application-owned service. It is registered in `+setup.ts`. See `examples/basic/api` for a directly reusable demo.
 
-| Export einer Methodendatei | Wirkung |
+| Method file export | Effect |
 | --- | --- |
-| `handler: GetHandler` | Pflicht; typisiert Kontext und Rückgabe anhand dieser Datei. Für andere Methoden entsprechend `PostHandler`, `PatchHandler` usw. |
-| `params`, `query`, `body` | Optionale Zod-Schemas für URL-Parameter, Query-Parameter und JSON-Body. |
-| `output` | Optionales Zod-Schema für die Antwort vor dem Envelope. |
-| `authentication = true` | Verlangt eine Session aus `+auth.ts`; ohne Session HTTP 401. |
-| `authorization = rule` | Verlangt eine Session und übergibt `rule` an `authorize()` in `+auth.ts`. |
-| `envelope = false` | Überspringt den geerbten Envelope für diese Route. |
+| `handler: GetHandler` | Required; types the context and return value from this file. Other methods use `PostHandler`, `PatchHandler`, and so on. |
+| `params`, `query`, `body` | Optional Zod schemas for URL parameters, query parameters, and the JSON body. |
+| `output` | Optional Zod schema for the response before the envelope is applied. |
+| `authentication = true` | Requires a session from `+auth.ts`; returns HTTP 401 without one. |
+| `authorization = rule` | Requires a session and passes `rule` to `authorize()` in `+auth.ts`. |
+| `envelope = false` | Skips the inherited envelope for this route. |
 
-Ungültige Eingaben liefern HTTP 400, ungültige Ausgaben HTTP 500. Ein Handler ohne Rückgabewert und ohne `ctx.payload` liefert HTTP 204. `ctx.payload = value` ist eine Alternative zum Rückgabewert. `ctx.status(201)` setzt den Erfolgsstatus. `ctx.send(value)` sendet sofort und umgeht damit `output` und Envelope.
+Invalid input returns HTTP 400; invalid output returns HTTP 500. A handler with no return value and no `ctx.payload` returns HTTP 204. Setting `ctx.payload = value` is an alternative to returning a value. `ctx.status(201)` sets the success status. `ctx.send(value)` sends immediately, bypassing `output` validation and the envelope.
 
-## Generierte Typen
+## Generated types
 
-`boring dev`, `boring check` und `boring sync` erzeugen für jeden Routenordner ein virtuelles `$types`-Modul unter `.boring/types`. Der Generator liest keinen Anwendungscode aus und dupliziert keine Schemas. Die erzeugten Typen referenzieren die Exporte der jeweiligen Methodendatei:
+`boring dev`, `boring check`, and `boring sync` generate a virtual `$types` module under `.boring/types` for every route directory. The generator does not evaluate application code or duplicate schemas. The generated types reference the exports of the corresponding method file:
 
-- `params`, `query` und `body` werden nach ihrer Zod-Ausgabe typisiert.
-- Die Rückgabe von `GetHandler` oder `PostHandler` muss zur Eingabe des `output`-Schemas passen.
-- Der Rückgabewert von `+setup.ts` wird zu `ctx.services`.
-- Der Rückgabewert von `authenticate()` wird zu `ctx.session`. Bei geschützten Routen ist `session` nicht optional.
-- Der Typ des zweiten `authorize()`-Parameters begrenzt erlaubte Werte für den `authorization`-Export.
-- Die Rückgabewerte aller geerbten `+middleware.ts`-Dateien werden zu `ctx.locals` zusammengeführt.
+- `params`, `query`, and `body` are typed according to their Zod output.
+- The return value of `GetHandler` or `PostHandler` must match the input of the `output` schema.
+- The return value of `+setup.ts` becomes `ctx.services`.
+- The return value of `authenticate()` becomes `ctx.session`. On protected routes, `session` is not optional.
+- The type of the second `authorize()` parameter limits the permitted values of the `authorization` export.
+- The return values of all inherited `+middleware.ts` files are merged into `ctx.locals`.
 
-Die Dateien werden nicht eingecheckt. Damit der Editor `./$types` genauso wie `boring check` auflösen kann, gibt es zwei Möglichkeiten. Ein einfaches Projekt lässt seine `tsconfig.json` die generierte Konfiguration erweitern:
+Generated files are not committed. There are two ways to make the editor resolve `./$types` in the same way as `boring check`. A simple project can extend the generated configuration from its `tsconfig.json`:
 
 ```json
 {
@@ -143,7 +143,7 @@ Die Dateien werden nicht eingecheckt. Damit der Editor `./$types` genauso wie `b
 }
 ```
 
-Falls die Anwendung bereits eine andere Basiskonfiguration erweitert, wird stattdessen nur `rootDirs` ergänzt:
+If the application already extends another base configuration, add only `rootDirs` instead:
 
 ```json
 {
@@ -153,78 +153,78 @@ Falls die Anwendung bereits eine andere Basiskonfiguration erweitert, wird statt
 }
 ```
 
-Die Konfiguration entsteht beim ersten `boring sync`, `boring dev` oder `boring check`. `boring check` setzt `rootDirs` selbst und funktioniert daher auch ohne diese Editor-Einstellung.
-Das API-Verzeichnis muss innerhalb des Projekts liegen, weil seine Position auf das generierte Verzeichnis `.boring/types` abgebildet wird.
+The configuration is created the first time you run `boring sync`, `boring dev`, or `boring check`. `boring check` sets `rootDirs` itself, so it also works without this editor setting.
+The API directory must be inside the project because its location is mapped to the generated `.boring/types` directory.
 
-## Dateien mit `+`
+## Files prefixed with `+`
 
-Die Dateinamen sind der Vertrag des Frameworks. Für gemeinsame Logik werden keine Express-Router per Hand verschachtelt.
+The filenames form the framework's contract. Shared logic does not require manually nested Express routers.
 
-| Datei | Ort und Lebensdauer | Vertrag |
+| File | Location and lifetime | Contract |
 | --- | --- | --- |
-| `+setup.ts` | Nur an der API-Wurzel; einmal pro `createApp()` | `setup(ctx)` gibt ein Objekt mit langlebigen Diensten zurück. Es steht typisiert als `ctx.services` bereit. Manuelles `ctx.set()` bleibt möglich, kann aber nicht abgeleitet werden. |
-| `+auth.ts` | Nur an der API-Wurzel; bei jeder gefundenen Route | `authenticate(ctx)` gibt eine Session zurück. `authorize(ctx, rule)` prüft eine Routenregel. Beide Exporte sind optional, mindestens einer ist nötig. |
-| `+middleware.ts` | In jedem URL-Ordner; pro Request von der Wurzel zum Routenordner | `handler(ctx)` gibt neue Request-Locals zurück. Sie stehen in nachfolgenden Schritten typisiert unter `ctx.locals`. Eine frühe Antwort per `ctx.send()` ist möglich. |
-| `+envelope.ts` | In jedem URL-Ordner; pro erfolgreicher Antwort | `handler(ctx)` gibt die formatierte Antwort zurück oder setzt `ctx.payload`. Die nächstgelegene Datei gilt. |
-| `+error.ts`, `+error.404.ts`, `+error.500.ts` | In jedem URL-Ordner; beim Fehler | `handler(ctx, error)` gibt die Fehlerantwort zurück. Die nächstgelegene Vorlage gilt; eine passende Statusdatei hat im selben Ordner Vorrang. |
+| `+setup.ts` | API root only; once per `createApp()` | `setup(ctx)` returns an object containing long-lived services. It is typed as `ctx.services`. Manual `ctx.set()` calls remain supported but cannot be inferred. |
+| `+auth.ts` | API root only; for every matched route | `authenticate(ctx)` returns a session. `authorize(ctx, rule)` checks a route rule. Both exports are optional, but at least one is required. |
+| `+middleware.ts` | Any URL folder; once per request from the root to the route folder | `handler(ctx)` returns new request locals. They are typed as `ctx.locals` in subsequent steps. An early response with `ctx.send()` is supported. |
+| `+envelope.ts` | Any URL folder; for every successful response | `handler(ctx)` returns the formatted response or sets `ctx.payload`. The nearest file applies. |
+| `+error.ts`, `+error.404.ts`, `+error.500.ts` | Any URL folder; when an error occurs | `handler(ctx, error)` returns the error response. The nearest template applies; a matching status-specific file in the same folder takes precedence. |
 
-Middleware **stapelt sich** entlang des URL-Pfades. Envelope und Fehlerdarstellung **überschreiben** dagegen die geerbte Vorlage, statt mehrfach ineinander verpackt zu werden. Für einen nicht gefundenen Pfad gilt die Fehlerdarstellung an der API-Wurzel. Leere HTTP-204-Antworten erhalten keinen Envelope.
+Middleware **stacks** along the URL path. Envelopes and error responses, by contrast, **override** an inherited template instead of being nested repeatedly. An unmatched path uses the error response defined at the API root. Empty HTTP 204 responses are not wrapped in an envelope.
 
-Im frühen Prototyp lagen diese Aufgaben in `_base/` und `_setup/`. Diese Sammelordner werden durch eindeutige `+`-Dateien ersetzt: `_setup/*` wird zu `+setup.ts`, Authentifizierung und Autorisierung aus `_base/` werden zu `+auth.ts`, die Envelope-Datei zu `+envelope.ts` und `404.ts` zu `+error.404.ts`. Die alten Ordner lösen beim Start einen Hinweis auf die neuen Konventionen aus.
+In the early prototype, these responsibilities lived in `_base/` and `_setup/`. These collection folders have been replaced by explicit `+` files: `_setup/*` becomes `+setup.ts`, authentication and authorization from `_base/` become `+auth.ts`, the envelope file becomes `+envelope.ts`, and `404.ts` becomes `+error.404.ts`. At startup, the legacy folders trigger a message pointing to the new conventions.
 
-Ohne Konventionsdateien gelten sichere Standards: keine Session, HTTP 401 für geschützte Routen ohne Session, HTTP 403 bei einer Autorisierungsregel ohne `authorize()`, unveränderte Erfolgsantwort und JSON-Fehlerantwort ohne interne Serverdetails. Ein Standard-Logger ist vorhanden. `+auth.ts` und `+setup.ts` ersetzen beziehungsweise ergänzen dieses Verhalten nach Bedarf. Das Beispiel unter `examples/basic/api/+auth.ts` nutzt ein Umgebungstoken nur zur Demonstration.
+Safe defaults apply when convention files are absent: no session, HTTP 401 for protected routes without a session, HTTP 403 for an authorization rule without `authorize()`, unchanged successful responses, and JSON error responses without internal server details. A default logger is provided. `+auth.ts` and `+setup.ts` replace or extend this behavior as needed. The example at `examples/basic/api/+auth.ts` uses an environment token for demonstration purposes only.
 
-## Kontext und Ablauf
+## Context and request flow
 
-Jede Anfrage erhält einen eigenen `Context`. `ctx.request` und `ctx.response` sind die Express-Objekte. `ctx.params`, `ctx.query` und `ctx.body` enthalten die validierten Eingaben. `ctx.services`, `ctx.session` und `ctx.locals` werden aus den Konventionsdateien abgeleitet. Die Map-Methoden `get()` und `set()` bleiben für dynamische Sonderfälle vorhanden; Rückgabewerte sind der typisierte Standardweg. Request-Daten gehören nicht in globale Variablen oder in den Setup-Kontext.
+Every request receives its own `Context`. `ctx.request` and `ctx.response` are the Express objects. `ctx.params`, `ctx.query`, and `ctx.body` contain validated input. `ctx.services`, `ctx.session`, and `ctx.locals` are inferred from convention files. The `get()` and `set()` map methods remain available for dynamic edge cases; return values are the standard typed approach. Request data does not belong in global variables or the setup context.
 
-Pro Route läuft: Authentifizierung → geerbte Middleware → Session-Prüfung → Autorisierung → Eingabevalidierung → Handler → Ausgabevalidierung → nächstgelegener Envelope → Senden. Alle Schritte werden abgewartet. Beim Fehler erhält die passende Fehlerdatei denselben Request-Kontext.
+Each route runs through: authentication → inherited middleware → session check → authorization → input validation → handler → output validation → nearest envelope → send. Every step is awaited. If an error occurs, the matching error file receives the same request context.
 
-## Lokales Beispiel und Prüfungen
+## Local example and checks
 
-Dieser Abschnitt betrifft ausschließlich die Arbeit am Repository von `boring-api`. Die Scripts werden nicht in Anwendungen übernommen; dort kommt der oben beschriebene `boring`-Befehl aus dem installierten Paket zum Einsatz. Voraussetzung ist Node.js 18 oder neuer. Das Repository enthält eine `yarn.lock`.
+This section applies only when working on the `boring-api` repository. These scripts are not copied into consumer applications; those use the `boring` command from the installed package as described above. Node.js 18 or newer is required. The repository includes a `yarn.lock`.
 
 ```bash
 yarn install
-yarn example:dev     # führt den lokalen Quellcode gegen examples/basic/api aus
-yarn example:check   # prüft das lokale Beispiel
-yarn example:sync    # erzeugt nur die Typen des lokalen Beispiels
-yarn example:start   # startet examples/basic/server.ts
+yarn example:dev     # run the local source against examples/basic/api
+yarn example:check   # check the local example
+yarn example:sync    # generate only the local example's types
+yarn example:start   # start examples/basic/server.ts
 yarn typecheck
 yarn test
-yarn build      # kompiliert nur die Bibliothek nach dist
+yarn build           # compile only the library into dist
 ```
 
-## Veröffentlichung
+## Publishing
 
-Ein Tag `v<version>` startet den Release-Workflow. Der Tag muss exakt zur Version in `package.json` passen, beispielsweise `v0.0.1` zu `"version": "0.0.1"`. Vor der Veröffentlichung laufen Beispielprüfung, TypeScript-Prüfung, Tests und Build. Anschließend erzeugt der Workflow ein npm-Tarball, veröffentlicht es über npm Trusted Publishing und erstellt ein GitHub Release mit Prüfsumme und automatisch erzeugten Release Notes.
+A `v<version>` tag starts the release workflow. The tag must exactly match the version in `package.json`; for example, `v0.0.1` matches `"version": "0.0.1"`. Before publishing, the workflow runs the example check, TypeScript check, tests, and build. It then creates an npm tarball, publishes it through npm Trusted Publishing, and creates a GitHub Release with a checksum and automatically generated release notes.
 
-Der Trusted Publisher für `@boringapi/core` verwendet diese GitHub-Actions-Daten:
+The Trusted Publisher for `@boringapi/core` uses the following GitHub Actions settings:
 
-- Organisation oder Benutzer: `PaDreyer`
+- Organization or user: `PaDreyer`
 - Repository: `boring-api`
-- Workflow-Datei: `release.yml`
-- Erlaubte Aktion: `npm publish`
+- Workflow file: `release.yml`
+- Permitted action: `npm publish`
 
-Da ein Trusted Publisher erst für ein bereits existierendes npm-Paket eingerichtet werden kann, wird die erste Version einmalig interaktiv mit `npm publish --access public` veröffentlicht. Danach wird der Trusted Publisher in den Paketeinstellungen aktiviert; weitere Versionen entstehen ausschließlich durch passende Git-Tags.
+Because a Trusted Publisher can only be configured for an existing npm package, publish the first version interactively once with `npm publish --access public`. Then enable the Trusted Publisher in the package settings; subsequent versions are created exclusively through matching Git tags.
 
-Für einen normalen Patch-Release erhöht `npm version patch` die Version in `package.json`, erstellt einen Release-Commit und legt den passenden Git-Tag an. Der anschließende Push überträgt Branch und Tag und startet dadurch den Release-Workflow:
+For a regular patch release, `npm version patch` increments the version in `package.json`, creates a release commit, and adds the matching Git tag. Pushing afterward transfers the branch and tag, which starts the release workflow:
 
 ```bash
 npm version patch
 git push origin master --follow-tags
 ```
 
-Für Minor- oder Major-Releases wird entsprechend `npm version minor` beziehungsweise `npm version major` verwendet.
+Use `npm version minor` or `npm version major` for minor or major releases, respectively.
 
-Der Beispielserver hört standardmäßig auf Port 4040; `PORT` kann ihn ändern.
+The example server listens on port 4040 by default; set `PORT` to change it.
 
 ```bash
 curl http://localhost:4040/health
 curl http://localhost:4040/items/42
 curl -X POST http://localhost:4040/echo \
   -H 'Content-Type: application/json' \
-  -d '{"message":"Hallo"}'
+  -d '{"message":"Hello"}'
 ```
 
-Die Antworten sind `{"service":"boring-api","status":"ok"}`, `{"id":"42"}` und `{"data":{"message":"Hallo"}}`. Der aktuelle Umfang unterstützt JSON-Bodies und einzelne dynamische Segmente wie `[id]`. Catch-all-Segmente sind noch nicht definiert.
+The responses are `{"service":"boring-api","status":"ok"}`, `{"id":"42"}`, and `{"data":{"message":"Hello"}}`. The current scope supports JSON bodies and individual dynamic segments such as `[id]`. Catch-all segments are not defined yet.

@@ -126,6 +126,9 @@ async function serves(directory, entry) {
         const force = setTimeout(() => child.kill("SIGKILL"), 5000);
         await exited;
         clearTimeout(force);
+        assert.equal(child.exitCode, 0, `Graceful shutdown failed: ${output}`);
+        assert.equal(child.signalCode, null);
+        assert.match(output, /resource disposed/);
     }
 }
 async function main() {
@@ -152,6 +155,34 @@ async function main() {
             assert.equal(initialized.devDependencies[name], undefined);
         }
         run("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], consumer);
+        writeFileSync(join(consumer, "src/infra/lifetime.ts"), `export function acquire() {
+    return { close() { console.info("resource disposed"); } };
+}
+`);
+        writeFileSync(join(consumer, "src/http/+setup.ts"), `import type { SetupContext } from "./$types";
+import { createHealth } from "$modules/health/facade";
+import { acquire } from "$infra/lifetime";
+export function setup(ctx: SetupContext) {
+    const resource = acquire();
+    ctx.onClose("fixture", () => resource.close());
+    return { health: createHealth() };
+}
+`);
+        writeFileSync(join(consumer, "src/server.ts"), `import { join } from "path";
+import { BoringApi } from "@boringapi/core";
+async function main() {
+    const app = await new BoringApi().createApp(join(__dirname, "http"));
+    const server = await app.listen(0);
+    console.info("Listening on port " + (server.address() as import("net").AddressInfo).port);
+    for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => {
+        void app.close().catch(error => { console.error(error); process.exitCode = 1; });
+    });
+}
+main().catch(error => { console.error(error); process.exitCode = 1; });
+`);
+        const consumerConfig = JSON.parse(readFileSync(join(consumer, "tsconfig.json"), "utf8"));
+        consumerConfig.include.push("src/server.ts");
+        json(join(consumer, "tsconfig.json"), consumerConfig);
         run(process.execPath, [executable, "build", "src/http"], consumer);
         const publicApis = {
             "@boringapi/compiler": "readConfiguration",
@@ -186,7 +217,31 @@ async function main() {
         assert.equal(typeof productionRequire("@boringapi/core/conventions").scanApi, "function");
         assert.ok(existsSync(productionRequire.resolve("@boringapi/core/agent-guide")));
         await serves(deployment, join(deployment, "artifact/boring-start.cjs"));
-        console.log(`All ${packages.length} tarballs verified: public APIs and declarations, documentation, CLI build, relocated HTTP deployment, and npm ci --omit=dev without development packages.`);
+        await serves(deployment, join(deployment, "artifact/server.js"));
+        const controlled = run(process.execPath, ["-e", `
+const assert = require("node:assert/strict");
+const { BoringApi } = require("@boringapi/core");
+const { readHealth } = require("./artifact/executions/health.js");
+(async () => {
+    const app = await new BoringApi().createApp(require("node:path").resolve("artifact/http"), { env: process.env });
+    try {
+        assert.deepEqual(await readHealth(app, { kind: "machine", id: "package-check", permissions: [] }), { status: "ok" });
+        await assert.rejects(app.execute({ identity: { kind: "machine", id: "deadline", permissions: [] }, timeoutMs: 10 }, ({ execution }) =>
+            new Promise((_resolve, reject) => execution.signal.addEventListener("abort", () => reject(execution.signal.reason), { once: true }))),
+            { code: "deadline" });
+        const starting = assert.rejects(app.listen(0), { code: "unavailable" });
+        await app.close();
+        await starting;
+    } finally { await app.close(); }
+    assert.equal(app.state, "closed");
+    await assert.rejects(readHealth(app, { kind: "machine", id: "closed", permissions: [] }), { code: "unavailable" });
+    console.info("controlled lifecycle verified");
+})().catch(error => { console.error(error); process.exitCode = 1; });
+`], deployment);
+        assert.match(controlled, /resource disposed/);
+        assert.match(controlled, /controlled lifecycle verified/);
+
+        console.log(`All ${packages.length} tarballs verified: public APIs and declarations, documentation, CLI build, relocated HTTP/custom-server and controlled execution with cleanup, and npm ci --omit=dev without development packages.`);
     } finally { rmSync(temporary, { recursive: true, force: true }); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

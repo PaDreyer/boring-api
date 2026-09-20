@@ -1,17 +1,21 @@
 import { Request, Response } from "express";
+import type { ExecutionContext } from "./execution";
 import { SetupContext } from "./setupContext";
 
 /** One context per request. Hooks and handlers may share values through the map. */
 export class Context extends Map<string, unknown> {
     readonly locals: Record<string, unknown> = {};
+    readonly setup: Readonly<Pick<SetupContext, "logger">>;
 
     constructor(
         public readonly request: Request,
         public readonly response: Response,
-        public readonly setup: SetupContext,
+        private readonly dependencies: SetupContext,
+        public readonly execution: ExecutionContext,
     ) {
         super();
-        this.set("setup", setup);
+        this.setup = Object.freeze({ logger: dependencies.logger });
+        this.set("setup", this.setup);
         this.set("headers", request.headers);
         this.set("query", request.query);
         this.set("params", request.params);
@@ -47,7 +51,7 @@ export class Context extends Map<string, unknown> {
     }
 
     get services(): Readonly<Record<string, unknown>> {
-        return this.setup.services;
+        return this.dependencies.services;
     }
 
     assignLocals(values: unknown): void {

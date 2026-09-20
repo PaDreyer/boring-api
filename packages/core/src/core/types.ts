@@ -20,6 +20,11 @@ export interface RouteModule {
     envelope?: boolean;
 }
 
+export interface ConfigModule {
+    schema: ZodTypeAny;
+    load: (env: Readonly<Record<string, string | undefined>>) => unknown | Promise<unknown>;
+}
+
 export interface SetupModule {
     setup: (context: SetupContext) => unknown | Promise<unknown>;
 }

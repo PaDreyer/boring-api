@@ -45,7 +45,7 @@ updating them. Framework release automation is documented in the
    Inspection is static; it does not execute application modules. If it fails,
    fix the diagnostics and run it again.
 4. Extend the module that already owns the behavior. Search public facades and
-   schemas, then its private service and repository port. Keep one
+   schemas, then its private service and storage port. Keep one
    implementation of each business operation across HTTP, jobs and web pages.
 
 Direct CLI commands below assume `api/`. Pass `--dir src/api` (or the actual API
@@ -63,17 +63,19 @@ before invoking their CLI. See [inspection](inspection.md) and [CLI configuratio
 | New behavior in an existing domain | Implement rules in its private `service.ts`, expose the operation through `facade.ts`, and reuse its schemas and injected dependencies. |
 | A genuinely separate domain | Generate a module, implement its public operations, then wire its factory in root `+setup.ts`. |
 | Shared data contract | `modules/<name>/schemas.ts`; derive TypeScript types from Zod. Keep it browser-safe. |
-| Storage contract | Type-only `modules/<name>/repository.ts` or `ports/<name>.ts`; adapters and setup may import these contracts directly. |
+| Storage contract | Type-only `modules/<name>/ports/<name>.ts`; adapters and setup may import these contracts directly. |
 | Growing implementation | Use `facade/`, `services/`, `schemas/` and `ports/` parts. Generic helper/internal files are rejected. Services cannot call peer services. Other modules use public facade operations and schemas. |
-| Database, configuration or external SDK | Sibling `infra/`; implement repository ports, construct adapters in setup and inject them into facades. |
+| Configuration | Root `+config.ts`: export Zod `schema` and data-only `load(env)`. Setup reads validated `ctx.config`. |
+| Database or external SDK | Sibling `infra/`; implement typed ports, construct adapters in setup, immediately register `ctx.onClose`, and inject them into facades. |
+| Controlled non-HTTP invocation | Sibling `executions/`; call `application.execute` with a trusted identity, then the existing injected facade. |
 | Authentication or route access | Root `+auth.ts`; reuse the application's identity provider and permission catalog. |
 | Shared request behavior | Named `+middleware`, `+envelope` or `+error` hooks at the appropriate URL scope. |
 | SPA | Sibling `web/client/`; reuse shared schemas and the application's typed API client. |
 | Server-rendered page / MPA | Sibling `web/server/`; receive existing facades through setup, validate input and escape HTML. |
 
 Facades expose plain functions or factories. They coordinate access, transactions and
-private services; services own business behavior, and repository ports describe
-storage needs. Add a repository port only for a module that persists data. No
+private services; services own business behavior, and storage ports describe
+storage needs. Add a storage port only for a module that persists data. No
 base class, decorator or separate registry is needed. Keep module dependencies
 acyclic. Invoke a module's services through its owning facade. The checker enforces callers inside the module as well as outside it,
 including aliases, service value escapes and type-only references. Factories expose
@@ -83,6 +85,9 @@ Export service operations as named functions, not callable containers. Do not hi
 capabilities behind broad data annotations or pass them to data parameters. Call
 `ctx.set`/`ctx.assign` directly; setter destructuring and aliases are rejected.
 Port imports may use `import type { Port }` or `import { type Port }`.
+Keep execution-context variables and collections inside individual operations.
+Module globals and facade/page factory or setup closures live across executions;
+they must not store contexts, including in Map/Set or nested containers.
 [Exact import rules and diagnostics](application.md#checked-import-boundaries).
 
 ## Implement a feature
@@ -90,10 +95,10 @@ Port imports may use `import type { Port }` or `import { type Port }`.
 1. Define or reuse the public input/output schemas. Keep browser-safe contracts
    separate from server implementations and infer types from the schemas.
 2. Implement domain behavior in the owning module's private service. Use shared
-   schemas to validate untrusted input and a narrow repository port for storage.
+   schemas to validate untrusted input and a narrow storage port for storage.
    Expose the use case through its facade with an explicit trusted actor. Enforce
    permissions and resource ownership for non-HTTP callers too.
-3. Define repository ports in the owning module and implement them in sibling
+3. Define storage ports in the owning module and implement them in sibling
    `infra/`. Construct adapters once in root `api/+setup.ts`, inject them into
    the facade, and return the facade for `ctx.services`.
 4. Add the thin HTTP adapter. Import method-specific handlers from `./$types`,
@@ -105,7 +110,7 @@ Port imports may use `import type { Port }` or `import { type Port }`.
 
 Use `npx boring add module invoices` only for a new domain. It generates
 `facade.ts`, private `service.ts` and `schemas.ts`; implement them and wire setup
-yourself. Add a private `repository.ts` when persistence is needed.
+yourself. Add a private `ports/storage.ts` when persistence is needed.
 `npx boring add endpoint 'orders/lookup/[id]/get' --from 'orders/[id]/get'` reuses
 an existing compatible adapter. Review its access declarations and arguments.
 Without a matching adapter, the generator produces a typed 501 stub. Generators
@@ -135,10 +140,11 @@ export function getHealth(): Health { return { status: "ok" }; }
 
 ```ts
 // modules/health/facade.ts
+import type { ExecutionContext } from "@boringapi/core";
 import { getHealth } from "./service";
 
 export function createHealth() {
-    return { get() { return getHealth(); } };
+    return { get(execution: ExecutionContext) { execution.throwIfAborted(); return getHealth(); } };
 }
 ```
 
@@ -158,7 +164,7 @@ import { health } from "$modules/health/schemas";
 import type { GetHandler } from "./$types";
 
 export const output = health;
-export const handler: GetHandler = ctx => ctx.services.health.get();
+export const handler: GetHandler = ctx => ctx.services.health.get(ctx.execution);
 ```
 
 Run `npm run sync`, `npm run check`, `npm test` and `npm run dev` in the generated
@@ -174,9 +180,13 @@ project. `GET /health` returns HTTP 200 with `{"status":"ok"}`.
   Hooks use their generated context types. Annotate hook contexts or use
   `satisfies` so returned services, sessions and locals retain inferred types.
   Never edit or commit `.boring/`; run sync to refresh editor configuration.
-- **Request lifetime:** one context per request. Keep actors, sessions and locals
+- **Execution lifetime:** use `ctx.execution` for HTTP and `application.execute`
+  for controlled callers. Pass the exact Core context as the first facade argument;
+  never return, fabricate, nest or capture it. Await all work and use cancellation
+  checkpoints. One context belongs to one invocation. Keep actors, sessions and locals
   out of module globals and long-lived services. Setup constructs dependencies;
-  authentication returns a session and middleware returns request locals.
+  authentication returns an explicit `{ kind, id, permissions }` session (plus
+  optional trusted tenant), and middleware returns request locals.
 - **Permissions:** reuse existing names and explicit role grants. Declare a
   permission string, non-empty `allOf` or non-empty `anyOf` with `as const`.
   Authorization requires a session; throw on denial (`false` does not deny).
@@ -195,6 +205,9 @@ project. `GET /health` returns HTTP 200 with `{"status":"ok"}`.
 ## Reuse storage and web integrations
 
 Keep one application-owned database adapter/pool, shared through injected facades.
+Register its cleanup immediately with `ctx.onClose`. Shutdown uses the application
+owner's `close()`, including custom servers. See [lifecycle and migration](lifecycle.md)
+for configuration, draining, timeout behavior and domain-error mappings.
 Reuse the project's migration history; run migrations explicitly before starting,
 never on ordinary requests. Business operations choose transaction boundaries;
 the adapter executes all transaction queries on the same connection. Parameterize

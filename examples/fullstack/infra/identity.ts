@@ -9,7 +9,7 @@ export function createIdentity(token: string | undefined): IdentityProvider {
             const candidate = Buffer.from(header.slice(7));
             const expected = Buffer.from(token);
             if (candidate.length !== expected.length || !timingSafeEqual(candidate, expected)) return undefined;
-            return { id: "demo-operator", permissions: ["orders:read", "orders:create"] };
+            return { kind: "user", id: "demo-operator", permissions: ["orders:read", "orders:create"] };
         },
     };
 }

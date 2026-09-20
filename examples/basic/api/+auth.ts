@@ -13,7 +13,7 @@ export function authenticate(ctx: AuthenticationContext) {
     const secret = Buffer.from(expected);
     if (actual.length === secret.length && timingSafeEqual(actual, secret)) {
         const roles = ["admin"] as const;
-        return { roles, permissions: permissionsForRoles(roles) };
+        return { kind: "user" as const, id: "demo-operator", roles, permissions: permissionsForRoles(roles) };
     }
 }
 

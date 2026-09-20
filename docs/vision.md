@@ -44,7 +44,7 @@ HTTP / job / schedule / event / command / server page
                      service
                          |
                          v
-                repository / other port
+                port
                          |
                          v
                      adapter

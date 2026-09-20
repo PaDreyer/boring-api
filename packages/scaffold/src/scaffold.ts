@@ -116,12 +116,12 @@ export function initializeProject(directory: string, apiDirectory = "api"): Scaf
     }
     const api = apiPath(root, apiDirectory);
     const apiName = slash(relative(root, api));
-    if (["modules", "infra", "web"].includes(basename(api)) || inside(join(root, "dist"), api) || apiName === "test") {
-        throw new Error("Choose an API directory separate from modules, infra, web, dist and the generated test directory.");
+    if (["modules", "infra", "web", "executions"].includes(basename(api)) || inside(join(root, "dist"), api) || apiName === "test") {
+        throw new Error("Choose an API directory separate from modules, infra, web, executions, dist and the generated test directory.");
     }
     // An API tree may contain unrecognized files or a differently named route.
     // Initialization never adopts or modifies an existing application tree.
-    for (const folder of [api, join(dirname(api), "modules"), join(dirname(api), "infra")]) {
+    for (const folder of [api, ...["modules", "infra", "executions"].map(name => join(dirname(api), name))]) {
         safePath(root, folder);
         if (stat(folder)) throw new Error(`Application directory already exists: ${folder}. Use boring inspect and boring add.`);
     }
@@ -187,7 +187,7 @@ export function addModule(projectRoot: string, apiDirectory: string, name: strin
     return { files, notes: [
         `Inspected existing modules: ${catalog.modules.map(module => module.name).join(", ") || "none"}.`,
         `Implement business rules in ${slash(relative(root, target))}/service.ts and expose coordinated operations through ${factoryName(name)}; define shared schemas in schemas.ts.`,
-        `Add a private repository.ts port if storage is needed. Import $modules/${name}/facade in ${slash(relative(root, api))}/+setup.ts, inject its infrastructure adapter and return the facade.`,
+        `Add a private ports/storage.ts port if storage is needed. Import $modules/${name}/facade in ${slash(relative(root, api))}/+setup.ts, inject its infrastructure adapter and return the facade.`,
     ] };
 }
 

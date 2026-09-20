@@ -1,4 +1,4 @@
-import { HttpError } from "./errors";
+import { ApplicationError } from "./errors";
 
 /** A permission, all listed permissions, or at least one listed permission. */
 export type PermissionRule<Permission extends string = string> =
@@ -39,5 +39,5 @@ export function requirePermissions<Permission extends string>(
     const allowed = mode === "allOf"
         ? required.every(permission => permissions.has(permission))
         : required.some(permission => permissions.has(permission));
-    if (!allowed) throw new HttpError(403, "Forbidden");
+    if (!allowed) throw new ApplicationError("forbidden", "Forbidden");
 }

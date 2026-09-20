@@ -71,7 +71,7 @@ async function withHttp(root: string, run: (baseUrl: string) => Promise<void>) {
     try {
         const app = await new BoringApi().createApp(join(root, "api"));
         server = await new Promise<import("node:http").Server>((resolve, reject) => {
-            const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+            const listening = app.http.listen(0, "127.0.0.1", () => resolve(listening));
             listening.once("error", reject);
         });
         await run(`http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`);
@@ -396,7 +396,7 @@ it("matches generated wire contracts to real HTTP for query arrays, envelopes, J
         try {
             const app = await new BoringApi().createApp(join(root, "api"));
             server = await new Promise<import("node:http").Server>((resolve, reject) => {
-                const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+                const listening = app.http.listen(0, "127.0.0.1", () => resolve(listening));
                 listening.once("error", reject);
             });
             const base = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;

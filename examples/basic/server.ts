@@ -6,7 +6,11 @@ if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error("PORT must be an integer between 0 and 65535");
 }
 
-new BoringApi().listen(join(__dirname, "api"), port).catch(error => {
+new BoringApi().listen(join(__dirname, "api"), port).then(application => {
+    for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => {
+        void application.close().catch(error => { console.error(error); process.exitCode = 1; });
+    });
+}).catch(error => {
     console.error(error);
     process.exitCode = 1;
 });

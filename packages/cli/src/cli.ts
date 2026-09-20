@@ -156,12 +156,16 @@ async function main(): Promise<void> {
         case "check":
         case "inspect":
         case "build": process.exitCode = check(root, args); break;
-        case "start":
-            await startProject(root, {
+        case "start": {
+            const application = await startProject(root, {
                 apiDirectory: args.explicitDirectory ? args.apiDirectory : undefined,
                 outputDirectory: args.outputDirectory, projectFile: args.projectFile,
             }, args.port);
+            for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => {
+                void application.close().catch(error => { console.error(error); process.exitCode = 1; });
+            });
             break;
+        }
         case "dev": {
             const server = startDevServer(root, args.apiDirectory, args.port, args.projectFile);
             process.once("SIGINT", () => { void server.close().then(() => process.exit(130)); });

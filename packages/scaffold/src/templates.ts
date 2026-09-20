@@ -59,10 +59,16 @@ export function consumerTemplates(api: string): Record<string, string> {
             compilerOptions: { target: "ES2020", module: "commonjs", moduleResolution: "node",
                 esModuleInterop: true, strict: true, skipLibCheck: true, rootDir: parent, outDir: "dist",
                 declaration: true, sourceMap: true },
-            include: parent === "." ? [`${api}/**/*.ts`, `${modules}/**/*.ts`, `${infra}/**/*.ts`] : [`${parent}/**/*.ts`],
+            include: parent === "." ? [`${api}/**/*.ts`, `${modules}/**/*.ts`, `${infra}/**/*.ts`, `${posix.join(parent, "executions")}/**/*.ts`] : [`${parent}/**/*.ts`],
         }, null, 2) + "\n",
         ".gitignore": "node_modules/\n.boring/\ndist/\n",
         [`${infra}/.gitkeep`]: "",
+        [`${api}/+config.ts`]: `import { z } from "zod";
+import type { ConfigEnvironment } from "./$types";
+
+export const schema = z.object({});
+export function load(_env: ConfigEnvironment) { return {}; }
+`,
         [`${api}/+setup.ts`]: `import type { SetupContext } from "./$types";
 import { createHealth } from "$modules/health/facade";
 
@@ -79,17 +85,25 @@ export type Health = z.infer<typeof health>;
 
 export function getHealth(): Health { return { status: "ok" }; }
 `,
-        [`${modules}/health/facade.ts`]: `import { getHealth } from "./service";
+        [`${modules}/health/facade.ts`]: `import type { ExecutionContext } from "@boringapi/core";
+import { getHealth } from "./service";
 
 export function createHealth() {
-    return { get() { return getHealth(); } };
+    return { get(execution: ExecutionContext) { execution.throwIfAborted(); return getHealth(); } };
 }
 `,
         [`${api}/health/get.ts`]: `import { health } from "$modules/health/schemas";
 import type { GetHandler } from "./$types";
 
 export const output = health;
-export const handler: GetHandler = ctx => ctx.services.health.get();
+export const handler: GetHandler = ctx => ctx.services.health.get(ctx.execution);
+`,
+        [`${posix.join(parent, "executions")}/health.ts`]: `import type { Application, ExecutionIdentity } from "@boringapi/core";
+import type { Services } from "../${basename(api)}/$types";
+
+export function readHealth(application: Application<Services>, identity: ExecutionIdentity) {
+    return application.execute({ identity }, ({ execution, services }) => services.health.get(execution));
+}
 `,
         "test/health.test.cjs": `const assert = require("node:assert/strict");
 const { it } = require("node:test");
@@ -99,10 +113,7 @@ const { BoringApi } = require("@boringapi/core");
 
 it("serves the health contract", async () => {
     const app = await new BoringApi().createApp(join(__dirname, "../dist/${basename(api)}"));
-    const server = await new Promise((resolve, reject) => {
-        const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
-        listening.once("error", reject);
-    });
+    const server = await app.listen(0);
     try {
         const response = await new Promise((resolve, reject) => {
             const req = request({ hostname: "127.0.0.1", port: server.address().port, path: "/health" }, res => {
@@ -117,7 +128,7 @@ it("serves the health contract", async () => {
         assert.equal(response.status, 200);
         assert.deepEqual(JSON.parse(response.body), { status: "ok" });
     } finally {
-        await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+        await app.close();
     }
 });
 `,
@@ -137,7 +148,7 @@ Keep project-specific instructions here; do not copy the package guide into this
 
 - API and hooks: \`${api}/\`. Setup: \`${api}/+setup.ts\`.
 - Business modules: \`${modules}/<name>/facade.ts\` and \`schemas.ts\` are public;
-  private \`service.ts\` holds business rules. Add a type-only \`repository.ts\` port
+  private \`service.ts\` holds business rules. Add a type-only \`ports/storage.ts\` port
   when storage is needed. Import public entries through \`$modules\`.
 - Infrastructure: \`${infra}/\`, imported through \`$infra/<path>\` where allowed.
   Setup constructs adapters and injects them into facades returned as services.

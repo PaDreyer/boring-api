@@ -1,7 +1,7 @@
 # Basic API example
 
 A small application with in-memory storage, a private orders service, a typed
-repository port, a public facade and permission rules.
+storage port, a public facade and permission rules.
 Run these commands from the repository root:
 
 ```bash
@@ -48,5 +48,5 @@ retrieval returns the same envelope with HTTP 200. Both routes require a valid
 token (otherwise HTTP 401). Invalid input returns HTTP 400, and a valid but unknown
 order UUID returns HTTP 404 with `{"error":{"message":"Order not found"}}`.
 To add another order operation, implement its rules in the private service,
-expose it through the existing facade and reuse the schemas and repository port.
+expose it through the existing facade and reuse the schemas and storage port.
 Then add the method file that calls the facade through `ctx.services`.

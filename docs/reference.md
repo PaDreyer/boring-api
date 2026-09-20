@@ -23,7 +23,7 @@ guarantees at each phase. Setup runs once per application and keeps its separate
 
 | Hook | Generated context | Available application data |
 | --- | --- | --- |
-| `+setup` | `SetupContext` | The setup logger and Map API. Returned services are inferred for subsequent requests. |
+| `+setup` | `SetupContext` | Validated `config`, `onClose(name, cleanup)`, setup logger and Map API. Returned services are inferred for subsequent requests. |
 | `authenticate` in `+auth` | `AuthenticationContext` | Inferred services; session is `undefined` and middleware locals are not available yet. |
 | `authorize` in `+auth` | `AuthorizationContext` | Inferred services, a required session, and completed middleware locals for routes declaring authorization. |
 | `+middleware` | `MiddlewareContext` | Inferred services, an optional session and only the preceding middleware's locals. |
@@ -105,8 +105,9 @@ The filenames form the framework's contract. Shared logic does not require manua
 
 | File | Location and lifetime | Contract |
 | --- | --- | --- |
-| `+setup.ts` | API root only; once per `createApp()` | `setup(ctx)` returns an object containing long-lived services. It is typed as `ctx.services`. Manual `ctx.set()` calls remain supported but cannot be inferred. |
-| `+auth.ts` | API root only; for every matched route | `authenticate(ctx)` returns a session. `authorize(ctx, rule)` checks a route rule. Both exports are optional, but at least one is required. |
+| `+config.ts` | API root only; before setup | `schema` validates data returned by `load(env)`; output becomes `SetupContext.config`. |
+| `+setup.ts` | API root only; once per `createApp()` | `setup(ctx)` registers owned resources with `onClose` and returns an object containing long-lived services. It is typed as `ctx.services`. Manual `ctx.set()` calls remain supported but cannot be inferred. |
+| `+auth.ts` | API root only; for every matched route | `authenticate(ctx)` returns a session with explicit `kind`, `id`, `permissions` and optional trusted `tenantId`. `authorize(ctx, rule)` checks a route rule. Both exports are optional, but at least one is required. |
 | `+middleware.ts` | Any URL folder; once per request from the root to the route folder | `handler(ctx)` returns new request locals. They are typed as `ctx.locals` in subsequent steps. An early response with `ctx.send()` is supported. |
 | `+envelope.ts` | Any URL folder; for every successful response | `handler(ctx)` returns the formatted response or sets `ctx.payload`. The nearest file applies. |
 | `+error.ts`, `+error.404.ts`, `+error.500.ts` | Any URL folder; when an error occurs | `handler(ctx, error)` returns the error response. The nearest template applies; a matching status-specific file in the same folder takes precedence. |
@@ -117,6 +118,8 @@ Safe defaults apply when convention files are absent: no session, HTTP 401 for p
 
 ## Context and request flow
 
-Every request receives its own `Context`. `ctx.request` and `ctx.response` are the Express objects. `ctx.params`, `ctx.query`, and `ctx.body` contain validated input. `ctx.services`, `ctx.session`, and `ctx.locals` are inferred from convention files. The `get()` and `set()` map methods remain available for dynamic edge cases; return values are the standard typed approach. Request data does not belong in global variables or the setup context.
+Every request receives its own `Context` and transport-independent `ctx.execution`.
+[Application lifecycle](lifecycle.md) specifies identity, deadlines, cancellation and
+shutdown. The context is active until awaited route and error handling settle. `ctx.request` and `ctx.response` are the Express objects. `ctx.params`, `ctx.query`, and `ctx.body` contain validated input. `ctx.services`, `ctx.session`, and `ctx.locals` are inferred from convention files. The `get()` and `set()` map methods remain available for dynamic edge cases; return values are the standard typed approach. Request data does not belong in global variables or the setup context.
 
 Each route runs through: authentication → inherited middleware → session check → authorization → input validation → handler → output validation → nearest envelope → send. Every step is awaited. If an error occurs, the matching error file receives the same request context.

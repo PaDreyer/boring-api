@@ -61,12 +61,12 @@ function build(root: string, args: string[] = []): void {
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 }
 
-async function serves(root: string, args: string[] = [], entry?: string, signal: NodeJS.Signals = "SIGTERM"): Promise<void> {
+async function serves(root: string, args: string[] = [], entry?: string, signal: NodeJS.Signals = "SIGTERM"): Promise<string> {
     const child = spawn(process.execPath, entry ? [entry] : [cli, "start", ...args, "--port", "0"], {
         cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PORT: "0" },
     });
     let output = "";
-    const exited = new Promise<void>(resolve => child.once("exit", () => resolve()));
+    const exited = new Promise<void>(resolve => child.once("close", () => resolve()));
     try {
         const port = await new Promise<number>((resolve, reject) => {
             const timeout = setTimeout(() => reject(new Error(`Start timed out:\n${output}`)), 10000);
@@ -94,7 +94,9 @@ async function serves(root: string, args: string[] = [], entry?: string, signal:
         await exited;
         clearTimeout(force);
         assert.notEqual(child.signalCode, "SIGKILL", `${signal} must terminate the server without a forced kill`);
+        assert.equal(child.exitCode, 0, output);
     }
+    return output;
 }
 
 it("boring build followed by boring start serves compiled aliases and hook types with no path arguments", async () => {
@@ -167,13 +169,24 @@ it("runs the generated entry point after relocation with no CLI or compiler impo
     assert.match(invalid.stderr, /PORT must be an integer/);
 });
 
-it("preserves signal termination when setup keeps background work alive", async () => {
+it("disposes application-owned background resources on SIGINT and SIGTERM", async () => {
     const root = fixture();
     const setup = "api/+setup.ts";
-    write(root, setup, 'setInterval(() => {}, 1000);\n' + readFileSync(join(root, setup), "utf8"));
+    write(root, setup, `import { health } from "$modules/health/facade";
+import type { SetupContext } from "./$types";
+export function setup(ctx: SetupContext) {
+    const timer = setInterval(() => {}, 1000);
+    ctx.onClose("timer", async () => {
+        await new Promise(resolve => setTimeout(resolve, 10));
+        clearInterval(timer);
+        console.info("timer disposed");
+    });
+    return { health };
+}`);
     build(root);
     for (const signal of ["SIGTERM", "SIGINT"] as const) {
-        await serves(root, [], join(root, "dist/boring-start.cjs"), signal);
+        assert.match(await serves(root, [], join(root, "dist/boring-start.cjs"), signal), /timer disposed/);
+        assert.match(await serves(root, [], undefined, signal), /timer disposed/);
     }
 });
 

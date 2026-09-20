@@ -7,7 +7,7 @@ export const params = orderParams;
 export const envelope = false;
 export const output = z.string();
 export const handler: GetHandler = async ctx => {
-    const html = await ctx.services.pages.order({ id: ctx.params.id, actor: ctx.session });
+    const html = await ctx.services.pages.order(ctx.execution, ctx.params.id);
     ctx.response.type("html");
     return html;
 };

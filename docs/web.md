@@ -2,7 +2,7 @@
 
 [Package README](../README.md) · [Agent guide](agent-guide.md)
 
-Keep storage behind repository adapters and reuse facade operations from every presentation surface.
+Keep persistence in infrastructure adapters and reuse facade operations from every presentation surface.
 
 ## Database and presentation ownership
 
@@ -17,7 +17,7 @@ api/orders/[id]/get.ts                read through the same facade
 api/pages/orders/[id]/get.ts          return rendered HTML, envelope = false
 modules/orders/facade.ts             permissions and transaction orchestration
 modules/orders/service.ts            private order rules and use cases
-modules/orders/repository.ts         type-only storage and transaction ports
+modules/orders/ports/storage.ts         type-only storage and transaction ports
 modules/orders/schemas.ts            shared Zod contracts
 infra/db/database.ts                 one PostgreSQL connection pool and adapter
 infra/db/migrations.ts               the database schema's migration history
@@ -27,7 +27,7 @@ web/server/pages.ts                  HTML rendering using the injected facade
 ```
 
 The orders facade selects the transaction boundary, while its private service
-creates the order and audit event through one repository. Both writes commit or
+creates the order and audit event through one injected storage port. Both writes commit or
 roll back together. The adapter uses one checked-out connection for the whole
 transaction, parameterized SQL and Zod validation of returned rows. This follows
 the [node-postgres transaction contract](https://node-postgres.com/features/transactions).
@@ -39,7 +39,7 @@ interfaces into the existing business module.
 
 The SPA reuses the public schemas for form validation and makes all requests
 through one `createClient` instance. The MPA page calls the same `orders.get`
-operation directly. It validates input, passes an explicit actor and escapes
+operation directly. It validates input, forwards the execution context and escapes
 HTML. Facade permission checks still apply when the caller is outside HTTP.
 The page's route uses the ordinary authentication/error pipeline, returns HTML
 with `ctx.response.type("html")`, and declares `envelope = false`.
@@ -55,6 +55,11 @@ is type-only and needs no runtime bundler alias. Boring API’s build compiles t
 server; use your frontend build tool for browser assets. `node dist/boring-start.cjs`
 starts the compiled API without development tools. For combined static hosting, use a custom server with `BoringApi.createApp()`
 as described in the [CLI reference](cli.md#integrating-with-an-existing-server).
+
+The application registers pool cleanup in setup. Controlled invocations in
+`executions/create-order.ts` call the very same facade and transaction port as HTTP.
+See [execution and transaction lifecycle](lifecycle.md) for cancellation, commit
+ambiguity, rollback failures and graceful shutdown.
 
 ## Generated browser contracts
 

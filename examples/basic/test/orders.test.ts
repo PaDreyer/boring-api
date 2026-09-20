@@ -12,13 +12,13 @@ it("enforces facade permissions even when called without HTTP", async () => {
     const viewer = { permissions: permissionsForRoles(["viewer"]) };
 
     await assert.rejects(() => orders.create({ input, actor: viewer }),
-        { status: 403, message: "Forbidden" });
+        { code: "forbidden", message: "Forbidden" });
     const created = await orders.create({ input, actor: creator });
     await assert.rejects(() => orders.get({ id: created.id, actor: creator }),
-        { status: 403, message: "Forbidden" });
+        { code: "forbidden", message: "Forbidden" });
     assert.deepEqual(await orders.get({ id: created.id, actor: viewer }), created);
     await assert.rejects(() => orders.get({ id: created.id, actor: { permissions: [] } }),
-        { status: 403, message: "Forbidden" });
+        { code: "forbidden", message: "Forbidden" });
 });
 
 it("does not let callers mutate stored orders through input or returned objects", async () => {

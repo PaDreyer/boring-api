@@ -10,8 +10,9 @@ The specifics below supplement the shared workflow.
 - Keep the PostgreSQL schema in `infra/db/migrations.ts`. Append migrations;
   never edit applied SQL. Parameterize SQL and validate rows with shared schemas.
   The facade selects the transaction boundary; the private orders service writes
-  the order and audit event through the repository port in one transaction.
-- Setup owns dependency construction. Infrastructure never calls business
+  the order and audit event through the storage port in one transaction.
+- Root `+config` validates application configuration. Setup owns dependency construction
+  and registers the PostgreSQL pool with `ctx.onClose` immediately. Infrastructure never calls business
   operations. Add external SDKs behind this same boundary, not in routes or pages.
   Import adapters/configuration via `$infra/<path>` and public module entries via
   `$modules/<name>/...`. The migration script preloads `register-source.ts` so its
@@ -20,8 +21,12 @@ The specifics below supplement the shared workflow.
   public schemas for form validation. Import generated `ApiRoutes` with
   `import type { ApiRoutes } from "$client"`;
   never import the server entry point or a facade into browser source.
-- Keep presentation under `web/server`. Pages take injected facades and explicit
-  actors; they validate inputs and escape HTML. They do not access storage.
+- Keep presentation under `web/server`. Pages take injected facades and the current
+  execution context; they validate inputs and escape HTML. They do not access storage.
+- Reuse `executions/create-order.ts` for controlled non-HTTP orders. HTTP, pages and
+  controlled executions pass the framework-created context to the same facade.
+  The application owns listeners and shutdown; call its `close()` to drain work
+  before disposing resources.
 - Permissions belong in both route declarations and business operations. The
   environment-controlled bearer-token provider is a demo, not production login.
 - Run the fullstack check/build scripts and repository checks. Set

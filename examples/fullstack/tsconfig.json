@@ -23,6 +23,7 @@
   },
   "include": [
     "api/**/*.ts",
+    "executions/**/*.ts",
     "modules/**/*.ts",
     "infra/**/*.ts",
     "server.ts",

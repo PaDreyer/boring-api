@@ -46,7 +46,7 @@ function orders(root: string) {
     write(root, "api/+auth.ts", [
         'import { requirePermissions } from "@boringapi/core";',
         'import type { AuthenticationContext, AuthorizationContext } from "./$types";',
-        'export const authenticate = (_ctx: AuthenticationContext) => ({ permissions: ["orders:read"] as const });',
+        'export const authenticate = (_ctx: AuthenticationContext) => ({ kind: "user" as const, id: "fixture", permissions: ["orders:read"] as const });',
         'export const authorize = (ctx: AuthorizationContext, rule: "orders:read") => requirePermissions(ctx.session.permissions, rule);',
     ].join("\n"));
     write(root, "modules/orders/schemas.ts", 'import { z } from "zod"; export const order = z.object({ id: z.string() }); export const orderParams = order.pick({ id: true }); export type Order = z.infer<typeof order>;');
@@ -82,7 +82,7 @@ it("initializes default and nested consumers with typed hooks, editor shortcuts 
         assert.deepEqual(editor.compilerOptions.paths["$modules/*"], [api === "api" ? "modules/*" : "src/modules/*"]);
         assert.deepEqual(editor.compilerOptions.paths["$infra/*"], [api === "api" ? "infra/*" : "src/infra/*"]);
         const built = buildProject(project);
-        assert.deepEqual(built.diagnostics, []);
+        assert.deepEqual(built.diagnostics.map(error => ts.flattenDiagnosticMessageText(error.messageText, "\n")), []);
         assert.ok(existsSync(join(built.output, api === "api" ? "api/health/get.js" : "http/health/get.js")));
         const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
         assert.equal(manifest.scripts.start, "node dist/boring-start.cjs");

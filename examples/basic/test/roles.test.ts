@@ -15,5 +15,5 @@ it("unions explicit role grants without sharing request permissions or granting 
         assert.throws(() => permissionsForRoles([role as Role]), /Unknown role/);
     }
     const namedAdmin = { role: "admin", permissions: [] };
-    assert.throws(() => requireAccess(namedAdmin, "orders:read"), { status: 403 });
+    assert.throws(() => requireAccess(namedAdmin, "orders:read"), { code: "forbidden" });
 });

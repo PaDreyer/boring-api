@@ -85,8 +85,8 @@ runs directly with Node; the build has rewritten its aliases to relative paths.
   migrations. The runner checks applied checksums and runs pending SQL inside
   a transaction guarded by a database lock. It never runs on normal requests.
 - `infra/db/database.ts` owns the pool and parameterized SQL. It exposes a narrow
-  typed repository and validates row shapes with the public Zod schema.
-- `modules/orders/repository.ts` defines the storage and transaction ports;
+  typed storage port and validates row shapes with the public Zod schema.
+- `modules/orders/ports/storage.ts` defines the storage and transaction ports;
   `modules/orders/service.ts` validates inputs and implements order creation,
   audit writing and lookup without importing `pg`.
 - `modules/orders/facade.ts` checks permissions and chooses the atomic transaction:
@@ -119,3 +119,28 @@ docker stop boring-api-tests
 
 This trust-authenticated database is only for local tests. Use normal database
 authentication for the running application.
+
+## Application lifecycle and controlled invocation
+
+`api/+config.ts` validates a per-application environment snapshot before setup.
+`+setup` owns the PostgreSQL pool and immediately registers its close callback.
+Authentication establishes an explicit user identity. Orders and pages receive
+`ctx.execution`; they never store an actor on a shared facade.
+
+`executions/create-order.ts` accepts the application owner, a trusted identity
+(including explicitly granted machine permissions) and order input. It uses
+`application.execute` and the same `orders.create` operation as HTTP. Bootstrap
+must authenticate its caller; do not turn untrusted permission claims into an identity.
+This is a controlled invocation example, not a durable job or command runtime.
+
+The compiled custom server owns both its Express listener and application shutdown.
+SIGINT/SIGTERM drains work before closing the pool. The transaction adapter checks
+cancellation before BEGIN and COMMIT and rolls back failures; queries already in
+progress are awaited. Cancellation after a successful commit cannot undo it.
+See [lifecycle and migration](../../docs/lifecycle.md).
+
+`test/lifecycle.test.ts` executes the actual HTTP hooks, facade, service and pg adapter
+against a protocol test double, comparing authorization, commits, rollback and shutdown
+across both entry paths. `test/fullstack.test.ts` additionally exercises real PostgreSQL
+when `BORING_TEST_DATABASE_URL` is set. Only type contracts live in `ports/storage.ts`;
+there is no separate repository implementation layer.

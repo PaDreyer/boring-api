@@ -33,7 +33,7 @@ boring build src/api
 boring start --port 3000
 ```
 
-`boring dev` loads TypeScript through `ts-node` and the Boring API import transformer, generates types before every restart, and watches the API directory and its sibling `modules`, `infra` and `web` directories, including directories added during development. For example, `boring dev src/api` watches `src/api`, `src/modules`, `src/infra` and `src/web`. Files elsewhere are not watched; keep generated web assets in the build output. `boring check` checks TypeScript, file conventions, route/hook export contracts, and application import boundaries. Architecture checks are mandatory. `boring start` loads compiled JavaScript. `boring sync` generates types and the editor configuration. Use `--project path/to/tsconfig.json` with `dev`, `sync`, `check`, `inspect` or `build` to select another TypeScript configuration.
+`boring dev` loads TypeScript through `ts-node` and the Boring API import transformer, generates types before every restart, and watches the API directory and its sibling `modules`, `infra`, `executions` and `web` directories, including directories added during development. For example, `boring dev src/api` watches `src/api`, `src/modules`, `src/infra`, `src/executions` and `src/web`. Files elsewhere are not watched; keep generated web assets in the build output. `boring check` checks TypeScript, file conventions, route/hook export contracts, and application import boundaries. Architecture checks are mandatory. `boring start` loads compiled JavaScript. `boring sync` generates types and the editor configuration. Use `--project path/to/tsconfig.json` with `dev`, `sync`, `check`, `inspect` or `build` to select another TypeScript configuration.
 
 Add these scripts to the `package.json` of an application that uses Boring API:
 
@@ -70,9 +70,9 @@ conflicting compiler output, including directories at these paths, is rejected b
 replacing the previous build. Custom application servers can instead use
 `BoringApi.createApp()` or `listen()` from their compiled JavaScript entry point.
 Keep source compiler registration in a separate development bootstrap.
-The generated entry point uses Node's default `SIGINT`/`SIGTERM` termination.
-Use a custom server when the application needs to close pools or other resources
-through its own shutdown handlers.
+The generated entry point wires `SIGINT`/`SIGTERM` to the application owner's
+`close()`. Resources registered by setup are drained and disposed according to the
+[lifecycle contract](lifecycle.md). Custom servers must wire their own signals.
 
 `boring start` remains a convenience when the development CLI is installed. It
 selects the last successful build using `.boring/build.json`, or `./dist` if that
@@ -139,7 +139,7 @@ boring add endpoint invoices/get --dir src/api
 creates `facade.ts`, private `service.ts` and `schemas.ts`. The factory and service
 start empty: implement domain rules in the service, expose coordinated operations
 through the facade, then import the factory via `$modules` in `+setup`, inject
-infrastructure and return the facade. Add a private `repository.ts` port when
+infrastructure and return the facade. Add a private `ports/storage.ts` port when
 the domain needs storage. The generator prints this wiring guidance instead of
 rewriting an application's setup function. Existing
 modules are reported with their public exports and must be extended in place.
@@ -182,7 +182,10 @@ import { BoringApi } from "@boringapi/core";
 
 async function main() {
     const app = await new BoringApi().createApp(join(__dirname, "api"));
-    app.listen(4040);
+    await app.listen(4040);
+    for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => {
+        void app.close().catch(error => { console.error(error); process.exitCode = 1; });
+    });
 }
 
 main().catch(error => {
@@ -191,7 +194,10 @@ main().catch(error => {
 });
 ```
 
-`createApp(directory)` returns an Express application. `listen(directory, port)` starts and returns an HTTP server directly. The loader scans the specified directory at startup and requires loadable `.ts` or `.js` files.
+`createApp(directory)` returns an application owner with an Express adapter at
+`.http`. `listen(directory, port)` starts an owned listener and returns that same
+kind of owner. Mount `application.http` in a custom Express parent, then call
+`application.listen(port, parent)` and `application.close()` to own its lifetime. The loader scans the specified directory at startup and requires loadable `.ts` or `.js` files.
 
 ## Module shortcuts, editor support and builds
 
@@ -202,7 +208,7 @@ always names the `modules/` directory beside the selected API directory:
 can stay relative. The shortcut does not grant access to another module's
 private files or let endpoints import facades directly.
 
-Use `$infra/<path>` for adapters and configuration in the sibling `infra/`
+Use `$infra/<path>` for adapters in the sibling `infra/`
 directory. For example, `boring dev src/http` resolves `$infra/db/database` to
 `src/infra/db/database`. Setup and business modules can use it where the import
 boundaries allow infrastructure; routes, browser code, shared schemas and server
@@ -210,7 +216,7 @@ pages cannot use the shortcut to bypass those boundaries.
 
 ```ts
 import { createDatabase } from "$infra/db/database";
-import { databaseUrl } from "$infra/config";
+// Setup reads validated configuration from ctx.config.
 ```
 
 Run `boring sync src/api` once after a fresh checkout and extend the generated

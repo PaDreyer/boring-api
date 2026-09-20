@@ -10,11 +10,12 @@ It uses TypeScript, Express 4 and Zod 3.
 - **Checked roles:** facades coordinate use cases, services use injected ports, and infrastructure implements them. Same-module imports and setup exposure follow the [role contract](docs/architecture.md).
 - **Enforced boundaries:** mandatory checks reject imports that bypass the supported application boundaries, including unused source and aliases.
 - **Discover before extending:** inspect existing operations, schemas and entry points; generators reuse the same checked application model.
+- **Owned lifecycle:** validated configuration, managed cleanup, isolated execution contexts and shared HTTP/non-HTTP operations. [Lifecycle contract](docs/lifecycle.md).
 - **Typed HTTP conventions:** filesystem routes and named hooks describe requests, validation, identity and responses.
 
 Today the framework provides an HTTP runtime, module import checks, web integration
-patterns and development/build tooling. The target extends this architecture to
-background jobs, schedules, events, commands and a common application lifecycle.
+patterns, a common execution lifecycle and development/build tooling. The target
+extends this architecture to durable jobs, schedules, events and command runtimes.
 The [project vision](docs/vision.md) is the design brief;
 the [roadmap](docs/roadmap.md) records current enforcement gaps and delivery milestones.
 
@@ -50,7 +51,8 @@ Use `npx boring` or package scripts to run the CLI. See [configuration and custo
 
 ```text
 api/
-├── +setup.ts            construct dependencies and expose facades
+├── +config.ts           load and validate application configuration
+├── +setup.ts            construct dependencies and register cleanup
 ├── +auth.ts             authenticate and authorize requests
 └── orders/
     ├── post.ts          POST /orders
@@ -58,7 +60,7 @@ api/
 modules/orders/
 ├── facade.ts            public operations and orchestration
 ├── service.ts           private business rules
-├── repository.ts        type-only storage port when needed
+├── ports/storage.ts     type-only storage port when needed
 └── schemas.ts           shared Zod contracts
 infra/                   storage and external adapters
 ```
@@ -71,7 +73,7 @@ import { health } from "$modules/health/schemas";
 import type { GetHandler } from "./$types";
 
 export const output = health;
-export const handler: GetHandler = ctx => ctx.services.health.get();
+export const handler: GetHandler = ctx => ctx.services.health.get(ctx.execution);
 ```
 
 `$modules` and `$infra` resolve beside the selected API directory. `./$types` is generated from your application. The [Agent guide](docs/agent-guide.md#a-complete-small-feature) shows the schema, service, facade and setup behind this route.
@@ -104,6 +106,7 @@ All guides below are included in the npm package.
 - [Agent guide](docs/agent-guide.md) — workflow, ownership rules and common decisions.
 - [CLI and deployment](docs/cli.md) — scaffolding, aliases, development and production.
 - [Routes, modules and permissions](docs/application.md) — application structure and checked boundaries.
+- [Application lifecycle](docs/lifecycle.md) — configuration, ownership, controlled execution, cancellation and migration.
 - [Hooks and generated types](docs/reference.md) — context, validation and request lifecycle.
 - [Inspection catalog](docs/inspection.md) — discover existing code and consume the JSON format.
 - [Database and web applications](docs/web.md) — transactions, SPA/MPA reuse and the typed browser client.

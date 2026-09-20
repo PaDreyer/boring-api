@@ -68,11 +68,11 @@ it("the development server reloads sibling modules and infra, including newly cr
         const infra = join(application, "infra");
         // Adding sibling roots alone must be detected, without any API file change.
         await change(() => {
-            mkdirSync(module, { recursive: true });
-            writeFileSync(join(module, "repository.ts"), 'export interface Store { read(): string; }');
-            writeFileSync(join(module, "service.ts"), 'import type { Store } from "./repository"; export const read = (store: Store) => store.read();');
+            mkdirSync(join(module, "ports"), { recursive: true });
+            writeFileSync(join(module, "ports/storage.ts"), 'export interface Store { read(): string; }');
+            writeFileSync(join(module, "service.ts"), 'import type { Store } from "./ports/storage"; export const read = (store: Store) => store.read();');
             writeFileSync(join(module, "facade.ts"),
-                'import type { Store } from "./repository"; import { read } from "./service"; export const createOrders = (store: Store) => ({ read() { return read(store); } });');
+                'import type { Store } from "./ports/storage"; import { read } from "./service"; export const createOrders = (store: Store) => ({ read() { return read(store); } });');
         }, "initial");
         await change(() => {
             mkdirSync(infra);
@@ -92,7 +92,7 @@ it("the development server reloads sibling modules and infra, including newly cr
         }, "changed storage");
         await change(() => {
             writeFileSync(join(module, "facade.ts"),
-                'import type { Store } from "./repository"; import { read } from "./service"; export const createOrders = (store: Store) => ({ read() { return "facade: " + read(store); } });\n');
+                'import type { Store } from "./ports/storage"; import { read } from "./service"; export const createOrders = (store: Store) => ({ read() { return "facade: " + read(store); } });\n');
         }, "facade: changed storage");
 
         const internal = join(module, "services");
@@ -100,7 +100,7 @@ it("the development server reloads sibling modules and infra, including newly cr
             mkdirSync(internal);
             writeFileSync(join(internal, "read.ts"), 'export const read = () => "nested";\n');
             writeFileSync(join(module, "facade.ts"),
-                'import { read } from "./services/read"; import type { Store } from "./repository"; export const createOrders = (_store: Store) => ({ read() { return read(); } });\n');
+                'import { read } from "./services/read"; import type { Store } from "./ports/storage"; export const createOrders = (_store: Store) => ({ read() { return read(); } });\n');
         }, "nested");
         await change(() => {
             writeFileSync(join(internal, "read.ts"), 'export const read = () => "nested change";\n');

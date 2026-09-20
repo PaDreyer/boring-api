@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { applicationRole, RoleSource } from "@boringapi/core/conventions";
+import { canonicalPath, applicationRole, RoleSource } from "@boringapi/core/conventions";
 import { declarationOf, isTypeOnlyExport, moduleExports, originalSymbol, symbolType } from "@boringapi/compiler";
 import type { ArchitectureDiagnostic } from "./architecture";
 import { typeOnlyDependency } from "./type-dependencies";
@@ -9,9 +9,60 @@ type FunctionBody = ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFun
 /** Value boundaries are deliberately a small, inspectable composition language. */
 export function checkBoundaries(program: ts.Program, apiDirectory: string, sources: ts.SourceFile[]): ArchitectureDiagnostic[] {
     const checker = program.getTypeChecker();
+    const coreSource = program.getSourceFiles().find(file => canonicalPath(file.fileName) === canonicalPath(require.resolve("@boringapi/core").replace(/\.js$/, ".d.ts")));
+    const contextExport = coreSource && moduleExports(checker, coreSource).find(symbol => symbol.name === "ExecutionContext");
+    const contextSymbol = contextExport && originalSymbol(checker, contextExport);
+    const contextBrand = contextSymbol && checker.getDeclaredTypeOfSymbol(contextSymbol).getProperties().find(property =>
+        property.declarations?.some(declaration => ts.isPropertySignature(declaration) && ts.isComputedPropertyName(declaration.name) &&
+            !!(checker.getTypeAtLocation(declaration.name.expression).flags & ts.TypeFlags.UniqueESSymbol)));
+    const coreErrorExport = coreSource && moduleExports(checker, coreSource).find(symbol => symbol.name === "HttpError");
+    const coreErrorSymbol = coreErrorExport && originalSymbol(checker, coreErrorExport);
+    const applicationExport = coreSource && moduleExports(checker, coreSource).find(symbol => symbol.name === "Application");
+    const applicationSymbol = applicationExport && originalSymbol(checker, applicationExport);
+    function coreExecutionType(type: ts.Type): boolean { return !!contextSymbol && type.getSymbol() === contextSymbol && !type.isUnionOrIntersection(); }
+    function executionContext(type: ts.Type): boolean {
+        if (!coreExecutionType(type)) return false;
+        const identity = type.getProperty("identity");
+        return !!identity && data(checker.getTypeOfSymbolAtLocation(identity, identity.valueDeclaration ?? identity.declarations![0]));
+    }
+    function containsExecutionValue(type: ts.Type, seen = new Set<ts.Type>()): boolean {
+        if (data(type)) return false;
+        if (seen.has(type) || seen.size > 2048) return false;
+        seen.add(type);
+        // Retention also covers interfaces extending the nominal context. The public
+        // operation-parameter exception still requires the exact Core type above.
+        if (coreExecutionType(type) || contextBrand && type.getProperties().some(property => property.escapedName === contextBrand.escapedName)) return true;
+        if (type.isUnionOrIntersection()) return type.types.some(part => containsExecutionValue(part, seen));
+        if (type.getCallSignatures().length || type.getConstructSignatures().length) return false;
+        if (type.flags & ts.TypeFlags.TypeParameter) {
+            const constraint = checker.getBaseConstraintOfType(type);
+            return !!constraint && containsExecutionValue(constraint, seen);
+        }
+        // Standard-library containers carry values in their type arguments, including
+        // write-only WeakSet contents. Do not walk their recursive method graphs.
+        if (type.flags & ts.TypeFlags.Object && (type as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference &&
+            type.getSymbol()?.declarations?.some(declaration => program.isSourceFileDefaultLibrary(declaration.getSourceFile()))) {
+            return checker.getTypeArguments(type as ts.TypeReference).some(part => containsExecutionValue(part, seen));
+        }
+        for (const kind of [ts.IndexKind.Number, ts.IndexKind.String]) {
+            const indexed = checker.getIndexTypeOfType(type, kind);
+            if (indexed && containsExecutionValue(indexed, seen)) return true;
+        }
+        return type.getProperties().some(property => {
+            const site = property.valueDeclaration ?? property.declarations?.[0];
+            if (!site) return false;
+            const member = checker.getTypeOfSymbolAtLocation(property, site);
+            // Accessors also expose stored values (e.g. mapped Readonly<Map<...>>).
+            // Input-only context parameters are borrowed capabilities, not retained values.
+            return containsExecutionValue(member, seen) || member.getCallSignatures().some(signature =>
+                containsExecutionValue(signature.getReturnType(), seen));
+        });
+    }
+
     const diagnostics: ArchitectureDiagnostic[] = [];
     const checked = new Set<ts.Node>();
     const operations = new Set<ts.Node>();
+    const applicationScopes = new Set<ts.Node>();
     const factoryReturns = new Set<ts.Node>();
     const roleCache = new Map<string, RoleSource>();
     const dataCache = new Map<ts.Type, boolean>();
@@ -89,6 +140,7 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
     }
     function dependency(type: ts.Type, owner: RoleSource, seen = new Set<ts.Type>()): boolean {
         if (data(type)) return true;
+        if (containsExecutionValue(type)) return false;
         if (seen.has(type)) return true;
         if (seen.size > 2048) return false;
         seen.add(type);
@@ -119,8 +171,11 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
         if (checked.has(fn)) return;
         checked.add(fn);
         operations.add(fn);
-        for (const parameter of fn.parameters) {
-            if (!data(checker.getTypeAtLocation(parameter))) report(parameter, "BORING112", "Public operations accept data, not callable capabilities, any or unknown. Inject typed ports into the facade factory.");
+        for (const [index, parameter] of fn.parameters.entries()) {
+            if (index === 0 && !parameter.dotDotDotToken && executionContext(checker.getTypeAtLocation(parameter))) continue;
+            if (index === 0 && !parameter.dotDotDotToken && role(fn).role === "execution" &&
+                applicationSymbol && checker.getTypeAtLocation(parameter).aliasSymbol === applicationSymbol) continue;
+            if (!data(checker.getTypeAtLocation(parameter))) report(parameter, "BORING112", "Public operations accept data, with only an exact Core ExecutionContext allowed as the first parameter; not other callable capabilities, any or unknown. Inject typed ports into the facade factory.");
         }
         const signature = checker.getSignatureFromDeclaration(fn);
         const output = signature?.getReturnType();
@@ -139,6 +194,7 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
             (!object.properties.length || object.properties.some(property => ts.isMethodDeclaration(property) || isFunction(value(property)))));
         if (!factory) { operation(fn); return; }
         checked.add(fn);
+        applicationScopes.add(fn);
         for (const expression of expressions) factoryReturns.add(expression);
         function markReturns(node: ts.Node) {
             if (ts.isFunctionLike(node)) return;
@@ -147,7 +203,7 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
         }
         if (fn.body) ts.forEachChild(fn.body, markReturns);
         for (const parameter of fn.parameters) {
-            if (!dependency(checker.getTypeAtLocation(parameter), role(fn))) report(parameter, "BORING112", "Facade factories receive data, own typed ports or public facades. Define effect contracts in repository.ts or ports/.");
+            if (!dependency(checker.getTypeAtLocation(parameter), role(fn))) report(parameter, "BORING112", "Facade factories receive data, own typed ports or public facades. Define effect contracts in ports/.");
         }
         for (const object of objects as ts.ObjectLiteralExpression[]) {
             for (const property of object.properties) {
@@ -162,6 +218,10 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
         }
     }
     function exposed(node: ts.Node): boolean {
+        // Use the instantiated value type first: a property of schema output can
+        // otherwise trace back to its Zod declaration rather than its data value.
+        // Conversion checks below still reject capability-erasing annotations.
+        if (data(checker.getTypeAtLocation(unwrap(node)))) return true;
         const target = value(node);
         if (ts.isCallExpression(target)) {
             const callee = value(target.expression);
@@ -197,6 +257,7 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
         return false;
     }
     function setup(fn: FunctionBody) {
+        applicationScopes.add(fn);
         for (const expression of returns(fn)) {
             exposureObject(expression);
         }
@@ -251,6 +312,14 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
     }
     function compareCapabilities(actual: ts.Type, expected: ts.Type, seen: ConversionState): CapabilityLoss {
         if (data(expected)) return "data";
+        // The nominal Core context has invariant framework capabilities. Compare
+        // only application identity data, not AbortSignal's recursive event APIs.
+        if (coreExecutionType(actual) && coreExecutionType(expected)) {
+            const source = actual.getProperty("identity")!;
+            const target = expected.getProperty("identity")!;
+            return capabilityLoss(checker.getTypeOfSymbolAtLocation(source, source.valueDeclaration ?? source.declarations![0]),
+                checker.getTypeOfSymbolAtLocation(target, target.valueDeclaration ?? target.declarations![0]), seen);
+        }
         // Both sides retain the supported Zod capability. Its recursive SDK internals
         // are not application data fields and must not exhaust the comparison budget.
         if (zodSchema(actual) && zodSchema(expected)) return;
@@ -320,6 +389,10 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
         }
     }
     function checkConversion(node: ts.Node, actual: ts.Type, expected: ts.Type) {
+        if (!(actual.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Never)) &&
+            containsExecutionValue(expected) && !containsExecutionValue(actual)) {
+            report(node, "BORING115", "A type conversion cannot create an ExecutionContext. Forward the framework-created context from HTTP or application.execute.");
+        }
         const loss = capabilityLoss(actual, expected);
         if (loss) report(node, loss === "setter" ? "BORING113" : "BORING112", loss === "setter"
             ? "Do not hide setup setters behind another callable contract. Preserve SetupContext and call its setters directly."
@@ -351,7 +424,6 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
         if (!signature) return;
         const parameters = signature.getParameters();
         for (const [index, argument] of (node.arguments ?? []).entries()) {
-            if (data(checker.getTypeAtLocation(unwrap(argument)))) continue;
             const parameter = parameters[Math.min(index, parameters.length - 1)];
             if (!parameter) continue;
             const declaration = parameter.valueDeclaration ?? parameter.declarations?.[0];
@@ -359,6 +431,7 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
             // Check instantiated slots and declared constraints, including each rest-tuple position.
             const actual = checker.getTypeAtLocation(unwrap(argument));
             const targets = [checker.getTypeOfSymbolAtLocation(parameter, node), ...(declaration ? [checker.getTypeAtLocation(declaration)] : [])];
+            if (data(actual) && !targets.some(coreExecutionType)) continue;
             for (let target of targets) {
                 if (declaration && ts.isParameter(declaration) && declaration.dotDotDotToken && !ts.isSpreadElement(argument)) {
                     const property = target.getProperty(String(index - parameters.length + 1));
@@ -386,7 +459,27 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
     }
     for (const source of sources) {
         const owner = role(source);
-        if (!["facade", "page", "setup", "service", "port", "schemas", "endpoint", "hook"].includes(owner.role)) continue;
+        if (!["facade", "page", "setup", "config", "execution", "service", "port", "schemas", "endpoint", "hook"].includes(owner.role)) continue;
+        if (owner.role === "config") {
+            for (const symbol of moduleExports(checker, source)) {
+                if (isTypeOnlyExport(checker, symbol)) continue;
+                const site = declarationOf(checker, symbol) ?? source;
+                const type = symbolType(checker, symbol, source);
+                const output = type.getProperty("_output");
+                if (symbol.name === "schema" && zodSchema(type) && output && data(checker.getTypeOfSymbolAtLocation(output, site))) continue;
+                if (symbol.name === "load" && isFunction(value(site)) && type.getCallSignatures().every(signature => data(signature.getReturnType()))) continue;
+                report(site, "BORING115", "Configuration exports only a data-producing Zod schema and load(env) returning data. Dependencies belong in setup.");
+            }
+        }
+        if (owner.role === "execution") {
+            for (const symbol of moduleExports(checker, source)) {
+                if (isTypeOnlyExport(checker, symbol)) continue;
+                const site = declarationOf(checker, symbol) ?? source;
+                const fn = value(site);
+                if (symbol.name !== "default" && isFunction(fn) && fn.getSourceFile() === source) operation(fn);
+                else report(site, "BORING115", "Controlled execution entries export named functions returning data, not registries or retained capabilities.");
+            }
+        }
         if (owner.role === "schemas") {
             for (const symbol of moduleExports(checker, source)) {
                 if (isTypeOnlyExport(checker, symbol)) continue;
@@ -463,7 +556,7 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
             if (["facade", "page", "setup"].includes(owner.role) && ts.isExportAssignment(node)) {
                 report(node, "BORING112", "Public boundaries use named ES exports, not export assignments or default exports.");
             }
-            if (["facade", "page", "setup", "service", "schemas"].includes(owner.role) && ts.isVariableDeclaration(node) && node.initializer && node.type) {
+            if (["facade", "page", "setup", "config", "execution", "service", "schemas"].includes(owner.role) && ts.isVariableDeclaration(node) && node.initializer && node.type) {
                 checkConversion(node, checker.getTypeAtLocation(unwrap(node.initializer)), checker.getTypeAtLocation(node));
             }
             if (["facade", "page"].includes(owner.role) && ts.isReturnStatement(node) && node.expression &&
@@ -474,7 +567,7 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
                 !checked.has(node) && !data(checker.getTypeAtLocation(value(node.body)))) {
                 report(node, "BORING112", "Helpers cannot return hidden capabilities. Return data or expose explicit facade-owned operations.");
             }
-            if (["facade", "page", "setup", "service", "schemas"].includes(owner.role) && ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+            if (["facade", "page", "setup", "config", "execution", "service", "schemas"].includes(owner.role) && ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
                 checkConversion(node, checker.getTypeAtLocation(unwrap(node.right)), checker.getTypeAtLocation(node.left));
             }
             if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node))) {
@@ -493,7 +586,7 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
                 node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
                 (ts.isPropertyAccessExpression(node.left) || ts.isElementAccessExpression(node.left)) &&
                 (["facade", "page", "setup"].includes(owner.role) && !data(checker.getTypeAtLocation(node.left.expression)) ||
-                    ["endpoint", "hook"].includes(owner.role) && (publicCapability(checker.getTypeAtLocation(node.left.expression)) || servicesAccess(node.left.expression)))) {
+                    ["endpoint", "hook", "execution"].includes(owner.role) && (publicCapability(checker.getTypeAtLocation(node.left.expression)) || servicesAccess(node.left.expression)))) {
                 report(node, "BORING113", "Do not mutate capability objects or their exports. Compose explicit facade operations in setup.");
             }
             if (["facade", "page", "setup"].includes(owner.role) && (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
@@ -506,6 +599,11 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
                 node.initializer && ts.isIdentifier(node.initializer) && ["Object", "Reflect"].includes(node.initializer.text)) {
                 report(node, "BORING113", "Do not destructure reflection APIs at application boundaries. Use explicit operation objects.");
             }
+            if (ts.isVariableDeclaration(node) && containsExecutionValue(checker.getTypeAtLocation(node))) {
+                let scope: ts.Node | undefined = node.parent;
+                while (scope && !isFunction(scope)) scope = scope.parent;
+                if (!scope || applicationScopes.has(scope)) report(node, "BORING115", "Execution context belongs to one invocation; do not retain it in module, facade factory, page factory or setup state.");
+            }
             if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) {
                 checkConversion(node, checker.getTypeAtLocation(unwrap(node.expression)), checker.getTypeAtLocation(node));
             }
@@ -514,6 +612,9 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
                 const symbol = checker.getSymbolAtLocation(node);
                 const original = symbol && originalSymbol(checker, symbol);
                 const declaration = original && declarationOf(checker, original);
+                if (original && original === coreErrorSymbol && ["facade", "service"].includes(owner.role)) {
+                    report(node, "BORING115", "Business operations throw ApplicationError or domain errors; HttpError belongs to HTTP entry points.");
+                }
                 if (declaration && !ts.isParameter(declaration) && role(declaration).role === "service" && symbolType(checker, original!, declaration).getCallSignatures().length) {
                     const defining = (ts.isFunctionDeclaration(node.parent) || ts.isVariableDeclaration(node.parent)) && node.parent.name === node;
                     const calling = ts.isCallExpression(node.parent) && node.parent.expression === node;

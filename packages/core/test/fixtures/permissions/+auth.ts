@@ -9,7 +9,7 @@ export async function authenticate(ctx: Context) {
     const permissions: Permission[] = [];
     if (identity === "reader" || identity === "both") permissions.push("orders:read");
     if (identity === "creator" || identity === "both") permissions.push("orders:create");
-    return { permissions };
+    return { kind: "user" as const, id: identity, permissions };
 }
 
 export async function authorize(ctx: Context, rule: PermissionRule<Permission>) {

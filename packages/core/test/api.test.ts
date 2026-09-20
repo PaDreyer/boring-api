@@ -37,7 +37,7 @@ async function request(server: Server, method: string, path: string, body?: unkn
 async function listen(endpoints: string): Promise<Server> {
     const app = await new BoringApi().createApp(endpoints);
     return new Promise((resolve, reject) => {
-        const server = createServer(app).listen(0, "127.0.0.1", () => resolve(server));
+        const server = createServer(app.http).listen(0, "127.0.0.1", () => resolve(server));
         server.once("error", reject);
     });
 }
@@ -197,7 +197,7 @@ it("clears a route payload before an error template handles a failure", async ()
     }
 });
 
-it("accepts falsey non-null sessions consistently with generated types", async () => {
+it("rejects falsey sessions that do not establish an execution identity", async () => {
     const root = mkdtempSync(join(tmpdir(), "boring-api-falsey-session-"));
     try {
         mkdirSync(join(root, "protected"));
@@ -210,8 +210,8 @@ it("accepts falsey non-null sessions consistently with generated types", async (
         const server = await listen(root);
         try {
             const response = await request(server, "GET", "/protected");
-            assert.equal(response.status, 200);
-            assert.deepEqual(response.body, { session: false });
+            assert.equal(response.status, 500);
+            assert.deepEqual(response.body, { error: { message: "Internal Server Error" } });
         } finally {
             await close(server);
         }
@@ -240,7 +240,7 @@ it("uses safe defaults until convention files override them", async () => {
         }
 
         writeFileSync(join(root, "+auth.js"),
-            "exports.authenticate = ctx => { ctx.set('session', { role: 'viewer' }); };\n");
+            "exports.authenticate = ctx => { ctx.set('session', { kind: 'user', id: 'viewer', permissions: [], role: 'viewer' }); };\n");
         const overridden = await listen(root);
         try {
             assert.deepEqual((await request(overridden, "GET", "/protected")).body, { ok: true });

@@ -39,7 +39,7 @@ it("prints one stable JSON document and refuses invalid contracts and unused arc
         const good = cli(root, ["inspect", "--dir", "api", "--json"]);
         assert.equal(good.status, 0, good.stderr);
         const result: Inspection = JSON.parse(good.stdout);
-        assert.equal(result.schemaVersion, 2);
+        assert.equal(result.schemaVersion, 3);
         assert.equal(result.routes[0].path, "/");
         assert.equal(result.routes[0].source.file, "api/get.ts");
         assert.ok(!good.stdout.includes(root));

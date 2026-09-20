@@ -125,7 +125,9 @@ The checker validates all archives, exports and documentation, installs them int
 a temporary consumer and compiles code using the public TypeScript APIs. It runs
 the CLI build, relocates the output and installs a fresh deployment with
 `npm ci --omit=dev`. No development package, TypeScript or ts-node may resolve in
-production; an HTTP request verifies the generated Node entry point.
+production; HTTP requests verify the generated and custom Node entry points, SIGTERM verifies
+resource cleanup, and a controlled non-HTTP invocation uses the same compiled facade
+before closing its owner.
 The checker needs npm registry access. CI runs it on every supported Node version
 and before publishing.
 

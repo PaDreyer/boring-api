@@ -7,7 +7,7 @@ export interface DevServer { close(): Promise<void>; }
 
 function watchDirectories(directory: string, onChange: () => void): () => void {
     const parent = dirname(directory);
-    const names = new Set([basename(directory), "modules", "infra", "web"]);
+    const names = new Set([basename(directory), "modules", "infra", "web", "executions"]);
     let watchers: FSWatcher[] = [];
     let timer: NodeJS.Timeout | undefined;
     let stopped = false;

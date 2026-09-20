@@ -1,7 +1,8 @@
+import { LifecycleError, type ExecutionContext } from "@boringapi/core";
 import { createHash, randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import type { PoolClient, PoolConfig } from "pg";
-import type { OrderDatabase, OrderRepository } from "$modules/orders/repository";
+import type { OrderDatabase, OrderStore } from "$modules/orders/ports/storage";
 import { order } from "$modules/orders/schemas";
 import { migrations } from "./migrations";
 
@@ -9,16 +10,22 @@ export function createDatabase(config: PoolConfig) {
     const pool = new Pool({ max: 10, idleTimeoutMillis: 1000, allowExitOnIdle: true, ...config });
     pool.on("error", error => console.error("Idle database connection failed:", error.message));
 
-    async function transaction<T>(operation: (client: PoolClient) => Promise<T>): Promise<T> {
+    async function transaction<T>(operation: (client: PoolClient) => Promise<T>, execution?: ExecutionContext): Promise<T> {
+        execution?.throwIfAborted();
         const client = await pool.connect();
         let discard = false;
         try {
+            execution?.throwIfAborted();
             await client.query("BEGIN");
             const result = await operation(client);
+            execution?.throwIfAborted();
             await client.query("COMMIT");
             return result;
         } catch (error) {
-            try { await client.query("ROLLBACK"); } catch { discard = true; }
+            try { await client.query("ROLLBACK"); } catch (rollback) {
+                discard = true;
+                throw new LifecycleError("Transaction and rollback failed", [error, rollback]);
+            }
             throw error;
         } finally {
             client.release(discard);
@@ -26,8 +33,8 @@ export function createDatabase(config: PoolConfig) {
     }
 
     const database: OrderDatabase = {
-        transaction: operation => transaction(async client => {
-            const store: OrderRepository = {
+        transaction: (execution, operation) => transaction(async client => {
+            const store: OrderStore = {
                 newId: randomUUID,
                 async insert(value) { await client.query("INSERT INTO orders (id, item, quantity) VALUES ($1, $2, $3)", [value.id, value.item, value.quantity]); },
                 async recordCreation(value, actorId) { await client.query("INSERT INTO order_events (order_id, actor_id) VALUES ($1, $2)", [value.id, actorId]); },
@@ -37,7 +44,7 @@ export function createDatabase(config: PoolConfig) {
                 },
             };
             return operation(store);
-        }),
+        }, execution),
     };
 
     return {

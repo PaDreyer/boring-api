@@ -5,7 +5,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "pat
 export const APPLICATION_ROLES = {
     endpoint: "HTTP transport; calls injected public operations",
     hook: "Request pipeline; calls public operations",
-    setup: "Application composition; constructs and injects dependencies",
+    config: "Application configuration; loads and validates data before setup",
+    execution: "Controlled non-HTTP entry; calls injected public operations",
+    setup: "Application composition; constructs dependencies and owns resource cleanup",
     facade: "Public use cases; coordinates access, services and transactions",
     service: "Module business rules; calls injected ports",
     schemas: "Shared data and validation contracts",
@@ -31,7 +33,7 @@ export function withinDirectory(parent: string, file: string): boolean {
 export function applicationDirectories(apiDirectory: string) {
     const api = canonicalPath(apiDirectory);
     const parent = dirname(api);
-    return { api, modules: canonicalPath(join(parent, "modules")), infra: canonicalPath(join(parent, "infra")),
+    return { api, executions: canonicalPath(join(parent, "executions")), modules: canonicalPath(join(parent, "modules")), infra: canonicalPath(join(parent, "infra")),
         browser: canonicalPath(join(parent, "web/client")), pages: canonicalPath(join(parent, "web/server")) };
 }
 
@@ -40,7 +42,7 @@ export function applicationRole(apiDirectory: string, file: string): RoleSource 
     const target = canonicalPath(file);
     if (withinDirectory(roots.api, target)) {
         const name = basename(target).replace(/\.[jt]s$/, "");
-        return { role: dirname(target) === roots.api && name === "+setup" ? "setup" :
+        return { role: dirname(target) === roots.api && name === "+config" ? "config" : dirname(target) === roots.api && name === "+setup" ? "setup" :
             /^(get|post|put|patch|delete|head|options)$/.test(name) ? "endpoint" : name.startsWith("+") ? "hook" : "unknown" };
     }
     if (withinDirectory(roots.modules, target)) {
@@ -49,9 +51,10 @@ export function applicationRole(apiDirectory: string, file: string): RoleSource 
         const role = entry === "facade" || parts[0] === "facade" ? "facade" :
             entry === "service" || parts[0] === "services" ? "service" :
             entry === "schemas" || parts[0] === "schemas" ? "schemas" :
-            entry === "repository" || parts[0] === "ports" ? "port" : "unknown";
+            parts[0] === "ports" ? "port" : "unknown";
         return { role, module: parts.length ? module : undefined, public: entry === "facade" || entry === "schemas" };
     }
+    if (withinDirectory(roots.executions, target)) return { role: "execution" };
     if (withinDirectory(roots.infra, target)) return { role: "adapter" };
     if (withinDirectory(roots.browser, target)) return { role: "browser" };
     if (withinDirectory(roots.pages, target)) return { role: "page" };

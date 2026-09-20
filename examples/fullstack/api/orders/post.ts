@@ -5,7 +5,7 @@ export const authorization = "orders:create";
 export const body = createOrder;
 export const output = order;
 export const handler: PostHandler = async ctx => {
-    const result = await ctx.services.orders.create({ input: ctx.body, actor: ctx.session });
+    const result = await ctx.services.orders.create(ctx.execution, ctx.body);
     ctx.status(201);
     return result;
 };

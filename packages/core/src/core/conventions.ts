@@ -26,12 +26,13 @@ export interface RouteSource {
 
 export interface ContractSource {
     file: string;
-    kind: "route" | "setup" | "auth" | "hook";
+    kind: "route" | "config" | "setup" | "auth" | "hook";
 }
 
 export interface ApiSources {
     routes: RouteSource[];
     contracts: ContractSource[];
+    config?: string;
     setup?: string;
     auth?: string;
     rootScope: SourceScope;
@@ -101,9 +102,9 @@ export function scanApi(apiDirectory: string): ApiSources {
             if (!name.startsWith("+")) {
                 if (!HTTP_METHODS.has(name)) throw new Error(`Unsupported endpoint file: ${file}`);
                 tree.contracts.push({ file, kind: "route" });
-            } else if (name === "+setup" || name === "+auth") {
+            } else if (name === "+setup" || name === "+auth" || name === "+config") {
                 if (segments.length) throw new Error(`${file}: ${name} is only allowed at the API root`);
-                const kind = name === "+setup" ? "setup" : "auth";
+                const kind = name === "+setup" ? "setup" : name === "+config" ? "config" : "auth";
                 tree[kind] = file;
                 tree.contracts.push({ file, kind });
             } else {

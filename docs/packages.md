@@ -8,7 +8,7 @@ only its own compiled implementation; cross-package imports use public exports.
 
 | Package | Responsibility | Public entry points |
 | --- | --- | --- |
-| `@boringapi/core` | HTTP runtime, browser transport and shared filesystem conventions | Root runtime API; `/client`; `/conventions`; `/agent-guide` |
+| `@boringapi/core` | Application/execution lifecycle, HTTP runtime, browser transport and shared filesystem conventions | Root runtime API; `/client`; `/conventions`; `/agent-guide` |
 | `@boringapi/compiler` | TypeScript configuration, alias resolution, import transforms and symbol analysis | Root compiler utilities; `/register` for `registerTypeScript` |
 | `@boringapi/typegen` | Route and hook types, standalone browser contracts | `generateTypes`, `generateClientContracts`, `TypegenResult` |
 | `@boringapi/analyzer` | Static project analysis, architecture checks and inspection | `analyzeProject`, `synchronizeProject`, `checkArchitecture`, `inspectProject` and diagnostic/catalog formatting |
@@ -25,6 +25,12 @@ separate because analysis needs generated types while scaffolding needs analysis
 
 Every package exposes `/package.json` for tooling that needs package metadata.
 Internal source files and compiled subpaths are not public APIs.
+
+Core exports `BoringApi`, the `Application` owner type, `ApplicationOptions`,
+`ExecutionContext`, `ExecutionIdentity`, `ExecutionScope`, `ExecutionOptions`,
+`ApplicationError`, `ExecutionError`, `LifecycleError` and `ShutdownTimeoutError`.
+See [lifecycle and migration](lifecycle.md) for construction, controlled execution
+and disposal. These exports require no compiler or development package.
 
 ## Releases and compatibility
 

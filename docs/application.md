@@ -2,7 +2,8 @@
 
 [Package README](../README.md) · [Agent guide](agent-guide.md)
 
-Build HTTP adapters around shared business operations. This reference covers route exports, permission rules, module ownership and the enforced import boundaries.
+Build HTTP adapters around shared business operations. This reference covers route exports, permission rules, module ownership and the enforced import boundaries. Application configuration,
+resource cleanup and HTTP/non-HTTP execution share the [lifecycle contract](lifecycle.md).
 
 ## Adding a route
 
@@ -115,7 +116,7 @@ export function authorize(ctx: AuthorizationContext, rule: AuthorizationRule): v
 The facade's `requireAccess(actor, rule)` calls
 `requirePermissions(actor.permissions, rule)`. The library helper accepts an
 array or a read-only set of granted names, returns normally on success, and
-throws `HttpError(403, "Forbidden")` on denial. Hooks must throw on denial;
+throws `ApplicationError("forbidden", "Forbidden")` (mapped to HTTP 403) on denial. Hooks must throw on denial;
 returning `false` does not deny access. Unexpected hook errors remain HTTP 500.
 Any `authorization` declaration already requires a session (HTTP 401 without
 one), so `authentication = true` is redundant on these routes.
@@ -158,7 +159,7 @@ app/
 │   └── orders/
 │       ├── facade.ts            public operations and orchestration
 │       ├── service.ts           private business rules
-│       ├── repository.ts        private storage contract
+│       ├── ports/storage.ts        private storage contract
 │       └── schemas.ts           public Zod schemas and inferred types
 └── infra/
     └── memoryStore.ts           demonstration storage adapter
@@ -176,9 +177,9 @@ reserved `+` files.
 | `modules/<name>/facade.ts` | Expose operations with explicit inputs and actor identity. Check access for every caller and coordinate private services, transactions and dependencies. |
 | `modules/<name>/schemas.ts` | Share Zod schemas and inferred data types. Keep contracts independent of server clients so browser code can reuse them later. |
 | `modules/<name>/service.ts` | Implement domain rules and use cases without HTTP or database driver imports. Keep this file private to its module. |
-| `modules/<name>/repository.ts` | Define the narrow storage port needed by the service when the domain persists data. Export types only. Setup and adapters import this contract directly; other modules cannot. |
+| `modules/<name>/ports/storage.ts` | Define the narrow storage port needed by the service when the domain persists data. Export types only. Setup and adapters import this contract directly; other modules cannot. |
 | `facade/`, `services/`, `schemas/`, `ports/` inside the module | Split the corresponding role into named files; every part retains that role’s restrictions. Generic `internal/` and helper files are rejected. |
-| `infra/` | Implement repository ports and external clients. Keep SQL and SDK calls out of the facade and service. |
+| `infra/` | Implement storage ports and external clients. Keep SQL and SDK calls out of the facade and service. |
 | `+setup.ts` | Create infrastructure and inject it into facades once per application. Return facades through the existing `ctx.services` contract. |
 
 Other modules use public root facades and schemas. Only the owning facade imports
@@ -192,6 +193,8 @@ Keep dependencies acyclic. Adapters import public schemas and port types directl
 Public facades export named functions and types. Factories return explicit objects
 of locally owned operations; facade parts may re-export other parts of that facade.
 Operations accept/return data, never callbacks or nested callable capabilities.
+The exact Core `ExecutionContext` may be the first positional argument; see the
+[lifecycle contract](lifecycle.md) for its narrow exception and ownership rules.
 Unknown and `any` contracts require validation/narrowing before crossing the boundary.
 Factory parameters describe data, own ports or public facades. Re-exporting services,
 returning raw implementations, mutable composition and capability-erasing assertions
@@ -214,17 +217,17 @@ export type CreateOrder = z.infer<typeof createOrder>;
 export type Order = z.infer<typeof order>;
 ```
 
-The example's `createOrders(repository)` facade exposes `create({ input, actor })`
+The basic example's `createOrders(store)` facade exposes `create({ input, actor })`
 and `get({ id, actor })`. It checks `orders:create` and `orders:read`, then calls
 its private service. The service validates inputs, constructs orders using the injected ID capability, uses the
-repository port and raises a domain error for a missing order. The facade maps
-that error to `HttpError(404, "Order not found")` for the normal Boring API error
+storage port and raises a domain error for a missing order. The facade maps
+that error to `ApplicationError("not_found", "Order not found")` for the normal Boring API error
 pipeline. Neither facade nor service depends on an Express request or response.
 Non-HTTP callers supply a trusted
 actor; the same facade enforces permissions for them.
 
 The setup hook supplies the storage adapter, which satisfies the module's
-repository port:
+storage port:
 
 ```ts
 // api/+setup.ts
@@ -250,19 +253,21 @@ database integration. For persistent storage and web interfaces, see the
 `boring check` enforces these rules for every application. There is no disabling
 flag or compatibility mode. In addition to the consumer's `tsconfig.json` files,
 the command includes all TypeScript/JavaScript source in the selected API
-directory and its sibling `modules`, `infra`, `web/client` and `web/server` directories. Unused
+directory and its sibling `modules`, `infra`, `executions`, `web/client` and `web/server` directories. Unused
 modules are checked too. It does not execute setup, hooks, routes or dependencies.
 
 | Source | Allowed dependencies |
 | --- | --- |
 | Method files such as `get.ts` | Public `schemas` modules, type-only generated `$types`, `@boringapi/core` and `zod`. Call business operations through `ctx.services`. Other packages and Node builtins belong behind a facade. |
-| Hooks other than `+setup` | Public facades/schemas, Boring API, Zod and Node helpers. Initialize SDKs and infrastructure in `+setup` and expose them through facades. |
+| Controlled entries in `executions/` | Public schemas, type-only generated types, Core and Zod. Receive an application owner and call injected facades inside `application.execute`. |
+| Root `+config` | Public schemas, Zod and Core types. Export a data-producing schema and configuration loader. |
+| Hooks other than `+setup` and `+config` | Public facades/schemas, Boring API, Zod and Node helpers. Initialize SDKs and infrastructure in `+setup` and expose them through facades. |
 | Root `+setup` | Public facades/schemas, infrastructure, server page adapters, packages and Node builtins. |
 | Facades and their `facade/` parts | Own services, port types, schemas and facade parts; other public facades/schemas; Core and Zod. |
 | Services and `services/` parts | Public/own schemas, own port types, Zod and Core types. No peer services, facades, concrete infrastructure, SDKs or Node APIs. |
-| Repository and `ports/` files | Type-only contracts using schemas, own ports and Core types; no runtime code. |
+| `ports/` files | Type-only contracts using schemas, own ports and Core types; no runtime code. |
 | Public `schemas` | Other public schemas, Zod and type-only Boring API imports. Keep runtime server code out of shared contracts. |
-| Infrastructure | Other infrastructure, public schemas, packages and Node builtins. Import repository/port types directly; even type-only facade imports are rejected. |
+| Infrastructure | Other infrastructure, public schemas, packages and Node builtins. Import port types directly; even type-only facade imports are rejected. |
 | Browser source in `web/client` | Other browser files, public schemas, browser-appropriate packages, `@boringapi/core/client` and type-only generated `$client`. No local server modules, Node builtins or runtime imports from the core server entry point or development packages (`compiler`, `typegen`, `analyzer`, `build`, `scaffold`, `dev`, `cli`), including subpaths and aliases. |
 | Server pages in `web/server` | Other server page files, public facades/schemas, Boring API and Zod. Setup injects existing facades. No infrastructure or SDK imports; modules and infrastructure cannot import pages. |
 
@@ -305,6 +310,7 @@ Diagnostics have stable codes and source locations:
 | `BORING111` | Port contains runtime implementation. |
 | `BORING112` | Public export, operation or dependency contract exposes an implementation/capability or has an unchecked type. |
 | `BORING113` | Invalid setup exposure or dynamic/mutable capability composition. |
+| `BORING115` | Invalid configuration/lifecycle boundary, fabricated or stored execution context, or HTTP errors in business operations. |
 | `BORING114` | Service value escapes its owning facade call, peer invocation, or unsupported service loading. |
 
 For endpoint violations, diagnostics also list callable operations inferred from
@@ -324,7 +330,7 @@ These checks establish source roles, dependency edges and supported value bounda
 They are not a JavaScript sandbox or a semantic duplicate detector. Global I/O,
 arbitrary reflection and installed-package behavior are not made safe by a passed
 check. Correct permissions, resource ownership and execution-state isolation still
-need behavior tests; lifecycle is the next roadmap milestone. Do not use casts,
+need behavior tests alongside the [implemented lifecycle](lifecycle.md). Do not use casts,
 reflection or global side channels to evade the structural contract.
 
 Run `boring check` in development and CI. Startup still validates API structure

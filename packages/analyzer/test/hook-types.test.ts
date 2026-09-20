@@ -47,7 +47,7 @@ export async function authenticate(ctx: AuthenticationContext) {
     // @ts-expect-error Services have concrete application types.
     ctx.services.missing;
     if (ctx.request.header("authorization")) {
-        return { user: ctx.services.users.find("user"), permissions: ["read"] as const };
+        return { kind: "user" as const, id: "test", user: ctx.services.users.find("user"), permissions: ["read"] as const };
     }
 }
 export const authorize = ((ctx, rule) => {

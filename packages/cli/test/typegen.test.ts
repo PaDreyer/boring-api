@@ -94,7 +94,7 @@ it("boring check validates permission rules for annotated and unannotated handle
         writeFileSync(join(root, "api", "+auth.ts"), [
             'import type { Context, PermissionRule } from "@boringapi/core";',
             'throw new Error("check must not execute auth modules");',
-            'export function authenticate() { return { permissions: ["orders:read"] as const }; }',
+            'export function authenticate() { return { kind: "user" as const, id: "test", permissions: ["orders:read"] as const }; }',
             'export function authorize(_ctx: Context, _rule: PermissionRule<"orders:read" | "orders:create">): void {}',
         ].join("\n"));
         const valid = [

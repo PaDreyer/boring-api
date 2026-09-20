@@ -33,7 +33,7 @@ export function buildProject(project: AnalyzedProject): { diagnostics: readonly 
     if (configured.outFile || configured.declarationDir || configured.composite || configured.incremental || configured.emitDeclarationOnly) {
         throw new Error("boring build uses a single output directory; outFile, declarationDir, composite, incremental and emitDeclarationOnly are unsupported.");
     }
-    for (const directory of [project.generatedRoot, project.apiDirectory, join(dirname(project.apiDirectory), "modules"), join(dirname(project.apiDirectory), "infra"), join(dirname(project.apiDirectory), "web")]) {
+    for (const directory of [project.generatedRoot, project.apiDirectory, join(dirname(project.apiDirectory), "modules"), join(dirname(project.apiDirectory), "infra"), join(dirname(project.apiDirectory), "web"), join(dirname(project.apiDirectory), "executions")]) {
         if (inside(directory, outDir) || inside(outDir, directory)) throw new Error(`Build output overlaps application or generated source: ${directory}`);
     }
     const files = project.program.getRootFileNames().filter(file => !inside(project.generatedRoot, file));
@@ -92,7 +92,11 @@ const port = Number(process.env.PORT ?? 4040);
 if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error("PORT must be an integer between 0 and 65535");
 }
-new BoringApi().listen(join(__dirname, ${JSON.stringify(apiDirectory)}), port).catch(error => {
+new BoringApi().listen(join(__dirname, ${JSON.stringify(apiDirectory)}), port).then(application => {
+    for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => {
+        void application.close().catch(error => { console.error(error); process.exitCode = 1; });
+    });
+}).catch(error => {
     console.error(error);
     process.exitCode = 1;
 });

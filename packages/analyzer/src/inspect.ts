@@ -212,7 +212,9 @@ export function inspectProject(project: AnalyzedProject) {
         modules.set(entry.module, module);
     }
     return {
-        schemaVersion: 2 as const, apiDirectory: path(project.apiDirectory),
+        schemaVersion: 3 as const, apiDirectory: path(project.apiDirectory),
+        configuration: project.sources.config ? { source: location(sourceFile(project.sources.config)), load: hook(project.sources.config, "load"), schema: schema(exported(checker, sourceFile(project.sources.config), "schema")!, sourceFile(project.sources.config)) } : null,
+        lifecycle: { owner: "application" as const, cleanup: "setup.onClose" as const, executions: project.roles.filter(source => source.role === "execution").map(source => path(source.file)) },
         setup: hook(project.sources.setup, "setup"),
         auth: project.sources.auth ? { source: location(sourceFile(project.sources.auth)),
             authenticate: exported(checker, sourceFile(project.sources.auth), "authenticate") ? hook(project.sources.auth, "authenticate") : null,
@@ -234,7 +236,7 @@ export function formatInspection(inspection: Inspection): string {
     const at = (source: SourceLocation | null) => source ? `${source.file}:${source.line}:${source.column}` : "framework default";
     const printValue = (value: ExportValue | null) => !value ? "none" : value.kind === "literal" ? JSON.stringify(value.value) :
         value.kind === "undefined" ? "undefined" : `${value.expression} (runtime expression; type: ${value.type})`;
-    const lines = [`Boring API — ${inspection.apiDirectory}`, `Setup: ${inspection.setup ? at(inspection.setup) : "none"}`,
+    const lines = [`Boring API — ${inspection.apiDirectory}`, `Configuration: ${inspection.configuration ? at(inspection.configuration.source) : "empty"}`, `Setup: ${inspection.setup ? at(inspection.setup) : "none"}`,
         `Authentication: ${inspection.auth?.authenticate ? at(inspection.auth.authenticate) : "none"}`,
         `Authorization: ${inspection.auth?.authorize ? at(inspection.auth.authorize) : "none"}`, "", "Routes"];
     for (const route of inspection.routes) {

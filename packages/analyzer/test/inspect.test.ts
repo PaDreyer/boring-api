@@ -170,7 +170,7 @@ it("instantiates generic method constraints and defaults while preserving depend
 
 it("distinguishes declaration literals, undefined and runtime expressions without evaluating rules", () => {
     project({
-        "api/+auth.ts": 'export const authenticate = () => ({ id: "user" }); export function authorize(_ctx: unknown, _rule: unknown) {} throw new Error("EXECUTED auth");',
+        "api/+auth.ts": 'export const authenticate = () => ({ kind: "user" as const, id: "user", permissions: [] }); export function authorize(_ctx: unknown, _rule: unknown) {} throw new Error("EXECUTED auth");',
         "modules/access/schemas.ts": 'export const read = "orders:read"; const allOf = [read] as const; export const rule = { allOf } as const;',
         "api/static/get.ts": 'import { rule } from "../../modules/access/schemas"; export const authorization = rule; export const handler = () => null;',
         "api/dynamic/get.ts": 'function choose(): string { throw new Error("EXECUTED rule"); } export const authorization = choose(); export const envelope = Boolean(1); export const handler = () => null;',
@@ -200,7 +200,7 @@ it("uses the runtime precedence for middleware, envelopes and nearest error fall
         "api/+envelope.js": 'exports.handler = () => "root";',
         "api/+error.404.js": 'exports.handler = () => "root404";',
         "api/+error.503.js": 'exports.handler = () => "root503";',
-        "api/+auth.js": 'exports.authenticate = () => ({}); exports.authorize = () => {};',
+        "api/+auth.js": 'exports.authenticate = () => ({ kind: /** @type {const} */ ("user"), id: "user", permissions: [] }); exports.authorize = () => {};',
         "api/+setup.ts": 'import { make } from "../modules/orders/facade"; export const setup = () => ({ orders: make() });',
         "modules/orders/facade.ts": 'export { make } from "./facade/operations";',
         "modules/orders/facade/operations.ts": 'export const make = () => ({ get(id: string) { return id; } });',
@@ -235,7 +235,7 @@ it("shares route precedence between type generation, inspection and startup", as
     }, async root => {
         const expected = ["HEAD /latest", "GET /latest", "GET /:id"];
         const app = await new BoringApi().createApp(join(root, "api"));
-        const runtime = app._router.stack.filter((layer: any) => layer.route)
+        const runtime = app.http._router.stack.filter((layer: any) => layer.route)
             .map((layer: any) => `${Object.keys(layer.route.methods)[0].toUpperCase()} ${layer.route.path}`);
         assert.deepEqual(runtime, expected);
         assert.deepEqual(inspect(root).routes.map(route => `${route.method} ${route.path}`), expected);

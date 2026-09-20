@@ -11,13 +11,13 @@ it("checks exact permissions and explicit allOf/anyOf rules", () => {
     assert.doesNotThrow(() => requirePermissions(["orders:create"], { anyOf: ["orders:create", "orders:read"] }));
 
     for (const rule of ["orders:create", { allOf: ["orders:read", "orders:create"] }] as const) {
-        assert.throws(() => requirePermissions(reader, rule), { status: 403, message: "Forbidden" });
+        assert.throws(() => requirePermissions(reader, rule), { code: "forbidden", message: "Forbidden" });
     }
     for (const rule of ["orders:read", { allOf: ["orders:read"] }, { anyOf: ["orders:read", "orders:create"] }] as const) {
-        assert.throws(() => requirePermissions([], rule), { status: 403, message: "Forbidden" });
+        assert.throws(() => requirePermissions([], rule), { code: "forbidden", message: "Forbidden" });
     }
     for (const grants of [["admin"], ["*"], ["orders:*"], ["orders:reader"]]) {
-        assert.throws(() => requirePermissions(grants, "orders:read"), { status: 403 });
+        assert.throws(() => requirePermissions(grants, "orders:read"), { code: "forbidden" });
     }
     assert.deepEqual(reader, ["orders:read"]);
     assert.deepEqual([...both], ["orders:read", "orders:create"]);

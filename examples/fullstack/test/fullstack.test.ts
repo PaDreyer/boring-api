@@ -3,11 +3,23 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { it } from "node:test";
 import { Pool } from "pg";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import type { Actor } from "../modules/access/schemas";
+import type { ExecutionContext } from "@boringapi/core";
 import { BoringApi } from "@boringapi/core";
 import { createClient, ApiError } from "@boringapi/core/client";
 import { spawnSync } from "node:child_process";
 
 const application = join(__dirname, "..");
+
+async function execute<T>(identity: Actor, operation: (execution: ExecutionContext<Actor>) => Promise<T>): Promise<T> {
+    const root = mkdtempSync(join(tmpdir(), "boring-order-execution-"));
+    const app = await new BoringApi().createApp(root);
+    try { return await app.execute({ identity }, ({ execution }) => operation(execution)); }
+    finally { await app.close(); rmSync(root, { recursive: true, force: true }); }
+}
+
 
 it("checks the fullstack application and prevents HTTP-free permission bypass through pages", async () => {
     const cli = join(require.resolve("@boringapi/cli/package.json"), "../bin/boring.cjs");
@@ -18,19 +30,19 @@ it("checks the fullstack application and prevents HTTP-free permission bypass th
     let calls = 0;
     const orders = createOrders({ async transaction() { calls++; throw new Error("Database must not be touched"); } });
     const pages = createPages(orders);
-    const denied = { id: "denied", permissions: [] };
-    await assert.rejects(orders.create({ input: { item: "Book", quantity: 1 }, actor: denied }), { status: 403 });
-    await assert.rejects(pages.order({ id: randomUUID(), actor: denied }), { status: 403 });
+    const denied = { kind: "machine" as const, id: "denied", permissions: [] };
+    await assert.rejects(execute(denied, ctx => orders.create(ctx, { item: "Book", quantity: 1 })), { code: "forbidden" });
+    await assert.rejects(execute(denied, ctx => pages.order(ctx, randomUUID())), { code: "forbidden" });
     assert.equal(calls, 0);
 });
 
-it("runs order rules and audit writes through the transaction repository", async () => {
+it("runs order rules and audit writes through the transaction port", async () => {
     const { createOrders } = await import("../modules/orders/facade");
     const records = new Map<string, { id: string; item: string; quantity: number }>();
     const writes: string[] = [];
     let transactions = 0;
     const orders = createOrders({
-        async transaction(operation) {
+        async transaction(_execution, operation) {
             transactions++;
             return operation({
                 newId: randomUUID,
@@ -40,11 +52,11 @@ it("runs order rules and audit writes through the transaction repository", async
             });
         },
     });
-    const actor = { id: "operator", permissions: ["orders:create", "orders:read"] as const };
-    const created = await orders.create({ input: { item: "Notebook", quantity: 2 }, actor });
+    const actor = { kind: "user" as const, id: "operator", permissions: ["orders:create", "orders:read"] as const };
+    const created = await execute(actor, ctx => orders.create(ctx, { item: "Notebook", quantity: 2 }));
     assert.deepEqual(writes, ["order", "audit:operator"]);
-    assert.deepEqual(await orders.get({ id: created.id, actor }), created);
-    await assert.rejects(orders.get({ id: randomUUID(), actor }), { status: 404 });
+    assert.deepEqual(await execute(actor, ctx => orders.get(ctx, created.id)), created);
+    await assert.rejects(execute(actor, ctx => orders.get(ctx, randomUUID())), { code: "not_found" });
     assert.equal(transactions, 3);
 });
 
@@ -63,31 +75,33 @@ it("persists API and page results in PostgreSQL, rolls back failed business writ
     const { createPages } = await import("../web/server/pages");
     const database = createDatabase({ connectionString: url });
     const orders = createOrders(database.orders);
-    const actor = { id: "test-operator", permissions: ["orders:read", "orders:create"] as const };
+    const actor = { kind: "user" as const, id: "test-operator", permissions: ["orders:read", "orders:create"] as const };
     const beforeUrl = process.env.DATABASE_URL;
     const beforeToken = process.env.BORING_API_TOKEN;
     const token = randomUUID();
     process.env.DATABASE_URL = url;
     process.env.BORING_API_TOKEN = token;
     let server: import("node:http").Server | undefined;
+    let owned: Awaited<ReturnType<BoringApi["createApp"]>> | undefined;
     try {
         await Promise.all([database.migrate(), database.migrate()]);
         assert.equal((await inspect.query("SELECT count(*)::int AS count FROM boring_migrations")).rows[0].count, 1);
-        const created = await orders.create({ input: { item: "<script>alert(1)</script>", quantity: 2 }, actor });
+        const created = await execute(actor, ctx => orders.create(ctx, { item: "<script>alert(1)</script>", quantity: 2 }));
         const restarted = createDatabase({ connectionString: url });
-        try { assert.deepEqual(await createOrders(restarted.orders).get({ id: created.id, actor }), created); }
+        try { assert.deepEqual(await execute(actor, ctx => createOrders(restarted.orders).get(ctx, created.id)), created); }
         finally { await restarted.close(); }
-        const html = await createPages(orders).order({ id: created.id, actor });
+        const html = await execute(actor, ctx => createPages(orders).order(ctx, created.id));
         assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
         assert.doesNotMatch(html, /<script>/);
-        const invalidActor = { ...actor, id: "" };
-        await assert.rejects(orders.create({ input: { item: "Must roll back", quantity: 1 }, actor: invalidActor }));
+        await inspect.query("ALTER TABLE order_events ADD CONSTRAINT reject_test_actor CHECK (actor_id <> 'fail-audit')");
+        const invalidActor = { ...actor, id: "fail-audit" };
+        await assert.rejects(execute(invalidActor, ctx => orders.create(ctx, { item: "Must roll back", quantity: 1 })));
         assert.equal((await inspect.query("SELECT count(*)::int AS count FROM orders")).rows[0].count, 1);
         assert.equal((await inspect.query("SELECT count(*)::int AS count FROM order_events")).rows[0].count, 1);
 
-        const app = await new BoringApi().createApp(join(application, "api"));
+        const app = owned = await new BoringApi().createApp(join(application, "api"));
         server = await new Promise<import("node:http").Server>((resolve, reject) => {
-            const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+            const listening = app.http.listen(0, "127.0.0.1", () => resolve(listening));
             listening.once("error", reject);
         });
         const address = server.address() as import("node:net").AddressInfo;
@@ -115,6 +129,7 @@ it("persists API and page results in PostgreSQL, rolls back failed business writ
         if (beforeUrl === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = beforeUrl;
         if (beforeToken === undefined) delete process.env.BORING_API_TOKEN; else process.env.BORING_API_TOKEN = beforeToken;
         if (server) await new Promise<void>((resolve, reject) => { server!.close(error => error ? reject(error) : resolve()); server!.closeAllConnections(); });
+        if (owned) await owned.close();
         await database.close();
         await inspect.end();
         await admin.query(`DROP SCHEMA ${schema} CASCADE`);

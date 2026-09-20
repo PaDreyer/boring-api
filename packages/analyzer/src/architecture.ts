@@ -7,7 +7,7 @@ import { checkBoundaries } from "./boundaries";
 import { typeOnlyDependency } from "./type-dependencies";
 
 export interface ArchitectureDiagnostic {
-    code: "BORING101" | "BORING102" | "BORING103" | "BORING104" | "BORING105" | "BORING106" | "BORING107" | "BORING109" | "BORING110" | "BORING111" | "BORING112" | "BORING113" | "BORING114";
+    code: "BORING101" | "BORING102" | "BORING103" | "BORING104" | "BORING105" | "BORING106" | "BORING107" | "BORING109" | "BORING110" | "BORING111" | "BORING112" | "BORING113" | "BORING114" | "BORING115";
     file: ts.SourceFile;
     start: number;
     length: number;
@@ -15,7 +15,7 @@ export interface ArchitectureDiagnostic {
 }
 
 type Area = {
-    kind: "api" | "module" | "infra" | "browser" | "pages" | "generated" | "client" | "framework" | "package" | "builtin" | "other";
+    kind: "api" | "execution" | "module" | "infra" | "browser" | "pages" | "generated" | "client" | "framework" | "package" | "builtin" | "other";
     module?: string;
     entry?: "facade" | "schemas";
     name?: string;
@@ -76,6 +76,7 @@ export function analyzeArchitecture(program: ts.Program, apiDirectory: string, g
         const target = canonical(file);
         if (clientEntries.has(target)) return { kind: "client" };
         if (inside(generated, target)) return { kind: "generated" };
+        if (inside(directories.executions, target)) return { kind: "execution" };
         if (inside(directories.api, target)) return { kind: "api" };
         if (inside(directories.infra, target)) return { kind: "infra" };
         if (inside(directories.browser, target)) return { kind: "browser" };
@@ -177,7 +178,7 @@ export function analyzeArchitecture(program: ts.Program, apiDirectory: string, g
     // Program. Parse those sources too, so CommonJS barrels cannot hide edges.
     for (const edges of dependencies.values()) {
         for (const edge of edges) {
-            if (!edge.target || !["api", "module", "infra", "browser", "pages", "other"].includes(edge.area.kind)) continue;
+            if (!edge.target || !["api", "execution", "module", "infra", "browser", "pages", "other"].includes(edge.area.kind)) continue;
             if (dependencies.has(edge.target)) continue;
             let source = sources.get(edge.target);
             if (!source) {
@@ -202,7 +203,7 @@ export function analyzeArchitecture(program: ts.Program, apiDirectory: string, g
         const fromRole = applicationRole(apiDirectory, file);
         if ((from.kind === "module" || from.kind === "api") && fromRole.role === "unknown") {
             const source = sources.get(file)!;
-            report("BORING107", source, source, "Unclassified application source. Use facade.ts/facade/, service.ts/services/, schemas.ts/schemas/ or repository.ts/ports/ inside modules/<name>; helpers and internal directories have no implicit permissions.");
+            report("BORING107", source, source, "Unclassified application source. Use facade.ts/facade/, service.ts/services/, schemas.ts/schemas/ or ports/ inside modules/<name>; helpers and internal directories have no implicit permissions.");
         }
         // Imported helpers outside the conventions cannot become an alternate
         // application layer. Their incoming edge is diagnosed below.
@@ -214,13 +215,17 @@ export function analyzeArchitecture(program: ts.Program, apiDirectory: string, g
             const framework = to.kind === "framework" || (to.kind === "package" && to.name === "@boringapi/core");
             const tooling = to.kind === "package" && toolingPackages.has(to.name!);
             const zod = to.kind === "package" && to.name === "zod";
-            const endpoint = fromRole.role === "endpoint";
+            const endpoint = fromRole.role === "endpoint" || fromRole.role === "execution";
             const setup = fromRole.role === "setup";
 
-            if (from.kind === "api" && to.kind === "generated" && edge.typeOnly) {
+            if ((from.kind === "api" || from.kind === "execution") && to.kind === "generated" && edge.typeOnly) {
                 continue;
             } else if (!edge.typeOnly && to.kind === "builtin" && to.name === "module") {
                 fail("BORING106", "Custom module loaders cannot be checked. Use explicit imports instead of node:module/createRequire.");
+            } else if (to.kind === "execution") {
+                fail("BORING104", "Controlled execution entries are called by bootstrap, not imported by application roles.");
+            } else if (fromRole.role === "config" && !(zod || framework && edge.typeOnly || toRole?.role === "schemas" && toRole.public)) {
+                fail("BORING115", "Configuration imports only Zod, public schemas and Core types. Read the supplied environment; construct dependencies in setup.");
             } else if (to.kind === "api") {
                 fail("BORING104", "Routes and hooks are entry points, not dependencies. Move shared behavior into a module facade or schemas.");
             } else if (toRole?.role === "service" && fromRole.role === "facade" && fromRole.module === toRole.module &&

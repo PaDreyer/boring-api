@@ -8,11 +8,11 @@ The package entry point is `README.md`; lead it with this architectural promise 
 
 ## Architecture decisions and progress
 
-- Judge changes against the whole backend model: entry point -> facade -> service -> repository or other port -> adapter, with explicit composition and lifecycle. Every supported entry point must reuse the same public application operations.
+- Judge changes against the whole backend model: entry point -> facade -> service -> port -> adapter, with explicit composition and lifecycle. Every supported entry point must reuse the same public application operations.
 - Give every responsibility a named, discoverable role and define its imports, exports, calls and lifetime. Prefer predictable decomposition into convention-following files. Generic private/internal/helper code must not become an architectural escape hatch.
 - Documentation alone does not enforce a pattern. Deliver the shared convention model, checks and bypass tests, inspection, generation, runtime behavior where needed, and a reference example together. Checks remain mandatory.
 - Treat current permissive behavior as an implementation gap when it conflicts with the vision. Do not preserve it as a design principle, widen rules to make an example pass, or claim a target rule is already enforced.
-- Work through the roadmap's dependency order. Keep incomplete acceptance criteria open and update status with concrete implementation and test evidence. The role-enforcement milestone and its audit corrections are complete; the next milestone is the common execution lifecycle, before additional runtimes.
+- Work through the roadmap's dependency order. Keep incomplete acceptance criteria open and update status with concrete implementation and test evidence. Role enforcement and the common execution lifecycle are complete; durable background jobs are the next milestone. Preserve the lifecycle contract when adding runtimes.
 
 ## Where things belong
 
@@ -21,7 +21,7 @@ The package entry point is `README.md`; lead it with this architectural promise 
 - `examples/basic/api`: a separate example consumer. A route is `<URL folders>/<HTTP method>.ts` below the consumer's chosen API directory.
 - Consumer `modules/<name>/facade.ts` and `schemas.ts` are public entry points; other module files are private. Privacy does not grant access across roles: the owning facade invokes services, services use ports, and setup injects concrete adapters. The shared role contract in `docs/architecture.md` defines enforced imports and public operation shapes. Split code into `facade/`, `services/`, `schemas/` and `ports/`; no generic internal/helper role exists. Sibling `infra/` holds adapters, `web/client/` marks browser source, and `web/server/` holds server presentation adapters wired by setup.
 - Use `$modules/<name>/...` and `$infra/<path>` for imports across those directories where architecture rules permit them. Both aliases follow the selected API's sibling directories through editor, source compiler and build resolution; same-module imports can stay relative.
-- `+setup.ts` and `+auth.ts`: root-only setup and authentication/authorization.
+- `+config.ts`, `+setup.ts` and `+auth.ts`: root-only validated configuration, dependency construction and authentication/authorization. Register acquired resources immediately with `ctx.onClose`; cleanup is reverse-order and continues after errors.
 - `+middleware.ts`: available at any URL folder; inherited from root to leaf.
 - `+envelope.ts`, `+error.ts`, `+error.<status>.ts`: available at any URL folder; nearest definition overrides an ancestor.
 - `.boring/types`: generated `$types` modules; never edit or commit them. Route files import method-specific handlers such as `GetHandler` from `./$types`.
@@ -33,6 +33,8 @@ The package entry point is `README.md`; lead it with this architectural promise 
 ## Invariants
 
 - A `Context` belongs to exactly one request. Never put request state on the Express app, a setup context, or module globals.
+- The application owner returned by `createApp` exposes `.http`, `.execute`, `.listen` and `.close`. Stop admission, drain/cancel active work, then dispose resources. A shutdown timeout must not free resources under running operations. Core installs no process-global signal handlers.
+- Every execution has one framework-created `ExecutionContext`: trusted user/machine identity, optional tenant, correlation, signal and deadline. Forward it as the first facade/page argument; never fabricate, retain or return it. Controlled entries in sibling `executions/` call injected facades through `application.execute`; machines have explicit grants.
 - The consumer explicitly passes its API directory to `BoringApi.createApp(directory)` or `listen(directory, port)`. The library must not depend on `process.cwd()` or a bundled `src/endpoints` directory.
 - Type generation accepts only API directories inside the consumer project. Resolve real paths and verify containment before deleting or writing generated files.
 - Await hooks and handlers before validating, wrapping or sending their result. Send exactly one response.
@@ -40,7 +42,7 @@ The package entry point is `README.md`; lead it with this architectural promise 
 - Use the same request context through authentication, middleware, the route handler and error handling. Apply middleware from root to leaf; choose the nearest envelope and error template.
 - Return a service object from `+setup`, a session from `authenticate`, and a locals object from middleware so type generation can expose `ctx.services`, `ctx.session`, and `ctx.locals`. Preserve support for imperative Map writes as an untyped escape hatch.
 - Apply input schemas before the handler and the output schema before the envelope. Input failures are 400; output failures are 500.
-- A route declaring `authentication` or `authorization` requires a session. Authorization denial should throw `HttpError(403, "Forbidden")`; unexpected errors should remain server errors.
+- A route declaring `authentication` or `authorization` requires an identity-bearing session. Business authorization uses `ApplicationError("forbidden", "Forbidden")`; HTTP maps it to 403. Keep `HttpError` in transport code and unexpected errors as server errors.
 - Prefer typed permission rules in consumers: a permission string, non-empty `allOf`, or non-empty `anyOf`. Roles explicitly bundle permissions; business operations enforce them too. Keep the library's custom `authorize(ctx, rule)` contract compatible.
 - A nearest `+envelope.ts` wraps every successful payload by default. A route can set `envelope = false` to opt out. Empty 204 responses have no envelope.
 - Do not embed passwords, tokens, or fake production integrations in examples. The example bearer-token hook is demonstration code controlled by `BORING_API_TOKEN`.

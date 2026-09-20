@@ -74,12 +74,12 @@ it("allows public facades, private implementations, schema sharing and injected 
             'import { check } from "../access/facade";',
             'throw new Error("must not execute");',
             'import { read } from "./service";',
-            'import type { Store } from "./repository";',
+            'import type { Store } from "./ports/storage";',
             'export function createOrders(store: Store) { return { get() { check(); return read(store); } }; }',
         ].join("\n"),
-        "modules/orders/service.ts": 'import type { Store } from "./repository"; export function read(store: Store) { return store.read(); }',
-        "modules/orders/repository.ts": 'export interface Store { read(): string; }',
-        "infra/store.ts": 'import type { Store } from "../modules/orders/repository"; export const store: Store = { read: () => "ok" };',
+        "modules/orders/service.ts": 'import type { Store } from "./ports/storage"; export function read(store: Store) { return store.read(); }',
+        "modules/orders/ports/storage.ts": 'export interface Store { read(): string; }',
+        "infra/store.ts": 'import type { Store } from "../modules/orders/ports/storage"; export const store: Store = { read: () => "ok" };',
         "web/client/page.tsx": 'import { order } from "../../modules/orders/schemas"; export const example = order.parse("ok");',
     }, root => {
         const result = inspect(root);
@@ -374,10 +374,10 @@ it("enforces roles across split files, unused helpers, ports and indirect infras
 it("rejects service aliases, returned capabilities, assertion erasure and setup exposure", () => {
     project({
         "modules/orders/service.ts": 'export const run = () => "order";',
-        "modules/orders/repository.ts": 'export interface Store { read(): string; }',
+        "modules/orders/ports/storage.ts": 'export interface Store { read(): string; }',
         "modules/orders/facade.ts": [
             'import { run } from "./service";',
-            'import type { Store } from "./repository";',
+            'import type { Store } from "./ports/storage";',
             'export const alias = run;',
             'const eager = run();',
             'export const eagerFactory = () => { const result = run(); return { get() { return result; } }; };',
@@ -413,9 +413,9 @@ it("accepts split facade orchestration with transaction and effect ports", () =>
     project({
         "modules/orders/schemas.ts": 'export type { Order } from "./schemas/order";',
         "modules/orders/schemas/order.ts": 'export interface Order { id: string; }',
-        "modules/orders/repository.ts": 'import type { Order } from "./schemas"; export interface Repository { read(): Promise<Order>; }',
-        "modules/orders/ports/transaction.ts": 'import type { Repository } from "../repository"; export interface Database { transaction<T>(run: (repository: Repository) => Promise<T>): Promise<T>; }',
-        "modules/orders/services/read.ts": 'import type { Repository } from "../repository"; export const read = (repository: Repository) => repository.read();',
+        "modules/orders/ports/storage.ts": 'import type { Order } from "../schemas"; export interface Repository { read(): Promise<Order>; }',
+        "modules/orders/ports/transaction.ts": 'import type { Repository } from "../ports/storage"; export interface Database { transaction<T>(run: (repository: Repository) => Promise<T>): Promise<T>; }',
+        "modules/orders/services/read.ts": 'import type { Repository } from "../ports/storage"; export const read = (repository: Repository) => repository.read();',
         "modules/orders/facade/operations.ts": 'import type { Database } from "../ports/transaction"; import { read } from "../services/read"; export const createOrders = (database: Database) => ({ get() { return database.transaction(repository => read(repository)); } });',
         "modules/orders/facade.ts": 'export { createOrders } from "./facade/operations";',
         "infra/database.ts": 'import type { Database } from "../modules/orders/ports/transaction"; export const database: Database = { transaction: run => run({ read: async () => ({ id: "1" }) }) };',
@@ -482,11 +482,11 @@ it("checks shared recursive data graphs once without mistaking them for capabili
 
 it("rejects services hiding ports behind data annotations before returning them through a facade", () => {
     project({
-        "modules/orders/repository.ts": 'export interface Store { read(): string; }',
-        "modules/orders/service.ts": 'import type { Store } from "./repository"; export function leak(store: Store): {} { return store; }',
-        "modules/orders/services/alias.ts": 'import type { Store } from "../repository"; export function leak(store: Store): {} { const hidden: {} = store; return hidden; }',
-        "modules/orders/services/arrow.ts": 'import type { Store } from "../repository"; export const leak = (store: Store): {} => store;',
-        "modules/orders/facade.ts": 'import type { Store } from "./repository"; import { leak } from "./service"; export const create = (store: Store) => ({ get() { return leak(store); } });',
+        "modules/orders/ports/storage.ts": 'export interface Store { read(): string; }',
+        "modules/orders/service.ts": 'import type { Store } from "./ports/storage"; export function leak(store: Store): {} { return store; }',
+        "modules/orders/services/alias.ts": 'import type { Store } from "../ports/storage"; export function leak(store: Store): {} { const hidden: {} = store; return hidden; }',
+        "modules/orders/services/arrow.ts": 'import type { Store } from "../ports/storage"; export const leak = (store: Store): {} => store;',
+        "modules/orders/facade.ts": 'import type { Store } from "./ports/storage"; import { leak } from "./service"; export const create = (store: Store) => ({ get() { return leak(store); } });',
     }, root => {
         const { program, diagnostics } = inspect(root);
         assert.equal(ts.getPreEmitDiagnostics(program).length, 0);

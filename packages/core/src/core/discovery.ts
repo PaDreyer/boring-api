@@ -1,9 +1,10 @@
-import { AuthModule, Route, RouteScope, SetupModule } from "./types";
+import { AuthModule, ConfigModule, Route, RouteScope, SetupModule } from "./types";
 import { scanApi, SourceScope } from "./conventions";
 import type { RouteModule } from "./types";
 
 export interface Discovery {
     routes: Route[];
+    config?: ConfigModule;
     setup?: SetupModule;
     auth?: AuthModule;
     rootScope: RouteScope;
@@ -41,6 +42,7 @@ function routeModule(file: string): RouteModule {
 
 export function discover(apiDirectory: string): Discovery {
     const sources = scanApi(apiDirectory);
+    let config: ConfigModule | undefined;
     let setup: SetupModule | undefined;
     let auth: AuthModule | undefined;
     type Hook = { handler: (...args: any[]) => unknown };
@@ -50,7 +52,11 @@ export function discover(apiDirectory: string): Discovery {
         const file = contract.file;
         if (contract.kind === "route") routes.set(file, routeModule(file));
         else if (contract.kind === "hook") hooks.set(file, withHandler<Hook>(file));
-        else if (contract.kind === "setup") {
+        else if (contract.kind === "config") {
+            const module = load(file);
+            if (typeof module.load !== "function" || !module.schema || typeof (module.schema as any).parseAsync !== "function") throw new Error(`${file} must export load(env) and a Zod schema`);
+            config = module as unknown as ConfigModule;
+        } else if (contract.kind === "setup") {
             const module = load(file);
             if (typeof module.setup !== "function") throw new Error(`${file} must export setup()`);
             setup = module as unknown as SetupModule;
@@ -75,7 +81,7 @@ export function discover(apiDirectory: string): Discovery {
         })),
     });
     return {
-        setup, auth, rootScope: scope(sources.rootScope),
+        config, setup, auth, rootScope: scope(sources.rootScope),
         routes: sources.routes.map(route => ({ method: route.method, path: route.path,
             source: route.file, module: routes.get(route.file)!, scope: scope(route.scope) })),
     };

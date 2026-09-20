@@ -127,7 +127,7 @@ it("rejects directories colliding with generated build files before the first wr
         assert.equal(existsSync(join(root, "output")), false);
         assert.equal(existsSync(join(root, ".boring/build.json")), false);
         rmSync(join(root, "app", reserved), { recursive: true });
-        assert.deepEqual(buildProject(checked(root)).diagnostics, []);
+        assert.deepEqual(buildProject(checked(root)).diagnostics.map(error => ts.flattenDiagnosticMessageText(error.messageText, "\n")), []);
         assert.ok(existsSync(join(root, "output/boring-start.cjs")));
         assert.ok(existsSync(join(root, "output/.boring-build.json")));
     }
@@ -145,7 +145,7 @@ it("rejects emitted JSON colliding with build metadata without overwriting appli
     assert.equal(readFileSync(join(root, "app/.boring-build.json"), "utf8"), '{"configured":true}');
     renameSync(join(root, "app/.boring-build.json"), join(root, "app/configuration.json"));
     write(root, "app/server.ts", 'import config from "./configuration.json"; export const configured = config.configured;');
-    assert.deepEqual(buildProject(checked(root)).diagnostics, []);
+    assert.deepEqual(buildProject(checked(root)).diagnostics.map(error => ts.flattenDiagnosticMessageText(error.messageText, "\n")), []);
     assert.equal(require(join(root, "output/server.js")).configured, true);
 });
 
@@ -163,7 +163,7 @@ it("preflights build reference collisions before writing output and permits a co
         if (target === "existing-directory") rmSync(reference, { recursive: true });
         else assert.equal(existsSync(reference), false);
         write(root, "tsconfig.json", original);
-        assert.deepEqual(buildProject(checked(root)).diagnostics, []);
+        assert.deepEqual(buildProject(checked(root)).diagnostics.map(error => ts.flattenDiagnosticMessageText(error.messageText, "\n")), []);
         assert.ok(existsSync(reference));
     }
 });
@@ -218,7 +218,7 @@ it("resolves $infra in separate source applications and portable runtime/declara
             assert.equal(adapter.shadowed((path: string) => path), "$infra/missing");
         }
     } finally { stopSecond(); stopFirst(); }
-    assert.deepEqual(buildProject(checked(first)).diagnostics, []);
+    assert.deepEqual(buildProject(checked(first)).diagnostics.map(error => ts.flattenDiagnosticMessageText(error.messageText, "\n")), []);
     renameSync(join(first, "output"), join(first, "deployed"));
     const emitted = join(first, "deployed/infra/adapter");
     assert.doesNotMatch(readFileSync(`${emitted}.d.ts`, "utf8"), /\$infra/);
@@ -303,7 +303,7 @@ it("resolves $client through generated editor paths and relocates its emitted de
     assert.equal(ts.resolveModuleName("$client", join(root, "app/web/client/pages/orders/page.ts"), configuration.options, ts.sys)
         .resolvedModule?.resolvedFileName, project.clientFile);
 
-    assert.deepEqual(buildProject(project).diagnostics, []);
+    assert.deepEqual(buildProject(project).diagnostics.map(error => ts.flattenDiagnosticMessageText(error.messageText, "\n")), []);
     renameSync(join(root, "output"), join(root, "deployed"));
     const api = join(root, "deployed/web/client/api");
     assert.doesNotMatch(readFileSync(`${api}.js`, "utf8"), /\$client/);
@@ -405,7 +405,7 @@ it("loads JavaScript companions instead of their declarations in the source comp
         assert.equal(facade.commonjs(), "commonjs");
         assert.equal(require(join(root, "app/http/legacy/get.ts")).handler(), "javascript");
     } finally { stop(); }
-    assert.deepEqual(buildProject(checked(root)).diagnostics, []);
+    assert.deepEqual(buildProject(checked(root)).diagnostics.map(error => ts.flattenDiagnosticMessageText(error.messageText, "\n")), []);
     const run = spawnSync(process.execPath, ["-e", [
         'const assert = require("node:assert/strict");',
         'const facade = require("./output/infra/legacy/loading.js");',
@@ -424,7 +424,7 @@ it("rewrites nested import types in emitted and copied declarations", () => {
     const facade = join(root, "app/modules/orders/facade.ts");
     writeFileSync(facade, `${readFileSync(facade, "utf8")}\n${nested}`);
     write(root, "app/modules/orders/schemas/nested.d.ts", nested.replace('"./schemas"', '"../schemas"'));
-    assert.deepEqual(buildProject(checked(root)).diagnostics, []);
+    assert.deepEqual(buildProject(checked(root)).diagnostics.map(error => ts.flattenDiagnosticMessageText(error.messageText, "\n")), []);
     const files = ["facade.d.ts", "schemas/nested.d.ts"].map(file => join(root, "output/modules/orders", file));
     for (const file of files) assert.ok(!readFileSync(file, "utf8").includes("$modules"));
     const declarations = ts.createProgram(files, {
@@ -442,13 +442,13 @@ it("can rebuild into the default output directory without ingesting the previous
     delete config.compilerOptions.outDir;
     delete config.include;
     writeFileSync(configFile, JSON.stringify(config));
-    assert.deepEqual(buildProject(checked(root)).diagnostics, []);
+    assert.deepEqual(buildProject(checked(root)).diagnostics.map(error => ts.flattenDiagnosticMessageText(error.messageText, "\n")), []);
     assert.ok(existsSync(join(root, "dist/http/orders/[id]/get.js")));
     rmSync(join(root, "app/http/orders"), { recursive: true });
     write(root, "app/http/get.ts", 'export const handler = () => "rebuilt";');
     const second = checked(root);
     assert.ok(!second.program.getSourceFiles().some(file => file.fileName.startsWith(join(root, "dist"))));
-    assert.deepEqual(buildProject(second).diagnostics, []);
+    assert.deepEqual(buildProject(second).diagnostics.map(error => ts.flattenDiagnosticMessageText(error.messageText, "\n")), []);
     assert.equal(existsSync(join(root, "dist/http/orders")), false);
     assert.ok(existsSync(join(root, "dist/http/get.js")));
 });
@@ -477,7 +477,7 @@ it("uses the emitted JSX extension for aliases with JSX preserved or transformed
             assert.equal(facade.jsx, "jsx");
             assert.equal(facade.typed, "typed-jsx");
         } finally { stop(); }
-        assert.deepEqual(buildProject(project).diagnostics, []);
+        assert.deepEqual(buildProject(project).diagnostics.map(error => ts.flattenDiagnosticMessageText(error.messageText, "\n")), []);
         const extension = jsx === "preserve" ? "jsx" : "js";
         assert.ok(existsSync(join(root, `output/infra/view/schemas.${extension}`)));
         const declarations = ts.createProgram([join(root, "output/infra/view/facade.d.ts")], {
@@ -506,7 +506,7 @@ it("builds portable CommonJS with working declarations and removes stale routes 
     ].join("\n"));
     write(root, "app/http/+auth.ts", [
         'import type { AuthenticationContext, AuthorizationContext } from "./$types";',
-        'export function authenticate(ctx: AuthenticationContext) { return { user: ctx.services.orders.read("user") }; }',
+        'export function authenticate(ctx: AuthenticationContext) { return { kind: "user" as const, id: "test", permissions: [], user: ctx.services.orders.read("user") }; }',
         'export function authorize(ctx: AuthorizationContext, _rule: "read"): void { ctx.session.user.id.toUpperCase(); }',
     ].join("\n"));
     write(root, "app/http/+middleware.ts", [
@@ -515,7 +515,7 @@ it("builds portable CommonJS with working declarations and removes stale routes 
     ].join("\n"));
     const project = checked(root);
     const built = buildProject(project);
-    assert.deepEqual(built.diagnostics, []);
+    assert.deepEqual(built.diagnostics.map(error => ts.flattenDiagnosticMessageText(error.messageText, "\n")), []);
     const output = join(root, "output");
     const route = readFileSync(join(output, "http/orders/[id]/get.js"), "utf8");
     assert.match(route, /require\("\.\.\/\.\.\/\.\.\/modules\/orders\/schemas.js"\)/);
@@ -532,7 +532,7 @@ it("builds portable CommonJS with working declarations and removes stale routes 
         'facade.lazy().then(value => assert.equal(value, "aliased"));',
         'const { BoringApi } = require("@boringapi/core");',
         'new BoringApi().createApp(require("node:path").resolve("output/http")).then(app => {',
-        '  const server = app.listen(0, "127.0.0.1", async () => {',
+        '  const server = app.http.listen(0, "127.0.0.1", async () => {',
         '    try { const response = await fetch(`http://127.0.0.1:${server.address().port}/orders/42`);',
         '      assert.equal(response.status, 200); assert.deepEqual(await response.json(), { id: "42", label: "aliased" });',
         '    } finally { server.close(); }',
@@ -552,7 +552,7 @@ it("builds portable CommonJS with working declarations and removes stale routes 
     assert.ok(map.sources[0].endsWith("app/http/orders/[id]/get.ts"));
     rmSync(join(root, "app/http/orders"), { recursive: true });
     write(root, "app/http/get.ts", 'export const handler = () => "root";');
-    assert.deepEqual(buildProject(checked(root)).diagnostics, []);
+    assert.deepEqual(buildProject(checked(root)).diagnostics.map(error => ts.flattenDiagnosticMessageText(error.messageText, "\n")), []);
     assert.equal(existsSync(join(output, "http/orders")), false);
     write(root, "app/http/get.ts", 'export const handler = 42;');
     assert.throws(() => buildProject(analyzeProject(root, "app/http")), /check errors/);

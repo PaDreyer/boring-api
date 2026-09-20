@@ -38,7 +38,7 @@ async function request(server: Server, method: string, path: string, body?: unkn
 async function listen(endpoints: string): Promise<Server> {
     const app = await new BoringApi().createApp(endpoints);
     return new Promise((resolve, reject) => {
-        const server = createServer(app).listen(0, "127.0.0.1", () => resolve(server));
+        const server = createServer(app.http).listen(0, "127.0.0.1", () => resolve(server));
         server.once("error", reject);
     });
 }

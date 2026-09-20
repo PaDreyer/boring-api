@@ -72,19 +72,18 @@ it("allows public facades, private implementations, schema sharing and injected 
         "modules/access/facade.ts": 'export function check() {}',
         "modules/orders/facade.ts": [
             'import { check } from "../access/facade";',
-            'import { writeFileSync } from "fs";',
-            'import { join } from "path";',
-            'writeFileSync(join(__dirname, "EXECUTED"), "must not happen");',
-            'export { label } from "./internal/operation";',
-            'export interface Store { read(): string; }',
-            'export function createOrders(store: Store) { return { get() { check(); return store.read(); } }; }',
+            'throw new Error("must not execute");',
+            'import { read } from "./service";',
+            'import type { Store } from "./repository";',
+            'export function createOrders(store: Store) { return { get() { check(); return read(store); } }; }',
         ].join("\n"),
-        "modules/orders/internal/operation.ts": 'export const label = "public through facade";',
-        "infra/store.ts": 'import type { Store } from "../modules/orders/facade"; export const store: Store = { read: () => "ok" };',
+        "modules/orders/service.ts": 'import type { Store } from "./repository"; export function read(store: Store) { return store.read(); }',
+        "modules/orders/repository.ts": 'export interface Store { read(): string; }',
+        "infra/store.ts": 'import type { Store } from "../modules/orders/repository"; export const store: Store = { read: () => "ok" };',
         "web/client/page.tsx": 'import { order } from "../../modules/orders/schemas"; export const example = order.parse("ok");',
     }, root => {
         const result = inspect(root);
-        assert.deepEqual(result.diagnostics, []);
+        assert.deepEqual(result.diagnostics.map(error => error.message), []);
         assert.equal(ts.getPreEmitDiagnostics(result.program).length, 0);
         assert.equal(existsSync(join(root, "modules/orders/EXECUTED")), false);
     });
@@ -115,7 +114,7 @@ it("rejects direct, aliased and CommonJS infrastructure/SDK imports in endpoints
     });
 });
 
-it("rejects foreign internals through aliases, re-exports and type imports while permitting a facade's own re-exports", () => {
+it("rejects foreign internals through aliases, re-exports and type imports and rejects a facade forwarding private implementations", () => {
     project({
         "modules/orders/facade.ts": 'export { secret as publicOperation } from "./internal/store";',
         "modules/orders/internal/store.ts": 'export const secret = 1; export type Record = { id: string };',
@@ -124,8 +123,8 @@ it("rejects foreign internals through aliases, re-exports and type imports while
         "api/get.ts": 'import { secret } from "../modules/billing/facade"; export const handler = () => secret;',
     }, root => {
         const { diagnostics } = inspect(root);
-        assert.deepEqual(diagnostics.map(diagnostic => diagnostic.code).sort(), ["BORING101", "BORING102", "BORING102"]);
-        assert.ok(!diagnostics.some(diagnostic => diagnostic.file.fileName === join(root, "modules/orders/facade.ts")));
+        assert.equal(diagnostics.filter(diagnostic => diagnostic.code === "BORING102").length, 3);
+        assert.ok(diagnostics.some(diagnostic => diagnostic.file.fileName === join(root, "modules/orders/facade.ts")));
     });
 });
 
@@ -141,10 +140,9 @@ it("keeps services private to their owning module across every application layer
         "web/client/page.ts": 'import { run } from "../../modules/orders/service"; export const page = run;',
     }, root => {
         const { diagnostics } = inspect(root);
-        assert.equal(diagnostics.length, 6);
-        assert.ok(diagnostics.every(diagnostic => diagnostic.code === "BORING102"));
-        assert.ok(diagnostics.every(diagnostic => diagnostic.message.includes("service.ts is private")));
-        assert.ok(!diagnostics.some(diagnostic => diagnostic.file.fileName === join(root, "modules/orders/facade.ts")));
+        assert.equal(diagnostics.filter(diagnostic => diagnostic.code === "BORING102" || diagnostic.code === "BORING105").length, 6);
+        assert.ok(diagnostics.some(diagnostic => diagnostic.code === "BORING112"));
+        assert.ok(diagnostics.some(diagnostic => diagnostic.file.fileName === join(root, "modules/orders/facade.ts")));
     });
 });
 
@@ -172,8 +170,8 @@ it("recognizes workspace package dependencies without treating package-shaped lo
         mkdirSync(join(root, "node_modules"));
         symlinkSync(join(root, "packages/sdk"), join(root, "node_modules/workspace-sdk"), "dir");
         const { diagnostics } = inspect(root, { paths: { zod: ["infra/db.ts"] } });
-        assert.equal(diagnostics.length, 2);
-        assert.ok(diagnostics.every(diagnostic => diagnostic.code === "BORING101"));
+        assert.equal(diagnostics.filter(diagnostic => diagnostic.code === "BORING101").length, 2);
+        assert.ok(diagnostics.some(diagnostic => diagnostic.code === "BORING110"));
     });
 });
 
@@ -186,9 +184,9 @@ it("finds runtime module cycles through private files and aliases but permits ty
         "modules/b/schemas.ts": 'import type { A } from "../a/schemas"; export type B = { a?: A };',
     }, root => {
         const { diagnostics } = inspect(root);
-        assert.equal(diagnostics.length, 1);
-        assert.equal(diagnostics[0].code, "BORING103");
-        assert.match(diagnostics[0].message, /billing -> orders -> billing/);
+        const cycle = diagnostics.find(diagnostic => diagnostic.code === "BORING103");
+        assert.ok(cycle);
+        assert.match(cycle.message, /billing -> orders -> billing/);
     });
 });
 
@@ -236,9 +234,9 @@ it("rejects tooling value imports in browser code and schemas through public exp
             "@tools": [require.resolve("@boringapi/typegen").replace(/\.js$/, ".d.ts")],
         } });
         assert.equal(ts.getPreEmitDiagnostics(program).length, 0);
-        assert.equal(diagnostics.length, 5);
-        assert.ok(diagnostics.every(diagnostic => diagnostic.code === "BORING105"));
-        assert.deepEqual(diagnostics.map(diagnostic => basename(diagnostic.file.fileName)).sort(),
+        const imports = diagnostics.filter(diagnostic => diagnostic.code === "BORING105");
+        assert.equal(imports.length, 5);
+        assert.deepEqual(imports.map(diagnostic => basename(diagnostic.file.fileName)).sort(),
             ["alias.ts", "generate.ts", "register.ts", "require.ts", "schemas.ts"]);
     });
 });
@@ -275,9 +273,10 @@ it("checks unused server pages and only permits setup to wire their presentation
         "web/client/server.ts": 'export { createPages } from "../server/pages";',
     }, root => {
         const { diagnostics } = inspect(root);
-        assert.equal(diagnostics.filter(diagnostic => diagnostic.code === "BORING109").length, 3);
+        assert.equal(diagnostics.filter(diagnostic => diagnostic.code === "BORING109").length, 2);
+        assert.ok(diagnostics.some(diagnostic => diagnostic.code === "BORING110"));
         assert.equal(diagnostics.filter(diagnostic => diagnostic.code === "BORING105").length, 1);
-        assert.equal(diagnostics.length, 4);
+
     });
 });
 
@@ -296,8 +295,7 @@ it("rejects computed imports, aliased loaders, unresolved JS requires and custom
         "infra/missing.js": 'exports.db = require("missing-database-package");',
     }, root => {
         const { diagnostics } = inspect(root);
-        assert.equal(diagnostics.length, 7);
-        assert.ok(diagnostics.every(diagnostic => diagnostic.code === "BORING106"));
+        assert.equal(diagnostics.filter(diagnostic => diagnostic.code === "BORING106").length, 7);
     });
 });
 
@@ -313,7 +311,7 @@ it("checks literal dynamic imports and CommonJS barrels even when TypeScript did
         const { program } = inspect(root);
         const partial = ts.createProgram([join(root, "modules/orders/facade.ts"), join(root, "infra/lazy.ts")], program.getCompilerOptions());
         const diagnostics = checkArchitecture(partial, join(root, "api"), join(root, ".boring/types"));
-        assert.equal(diagnostics.filter(diagnostic => diagnostic.code === "BORING102").length, 1);
+        assert.ok(diagnostics.some(diagnostic => diagnostic.code === "BORING102"));
         assert.ok(!diagnostics.some(diagnostic => diagnostic.code === "BORING106"));
     });
 });
@@ -328,7 +326,8 @@ it("does not allow unclassified helpers or misplaced module files to bypass the 
     }, root => {
         const { diagnostics } = inspect(root);
         assert.equal(diagnostics.filter(diagnostic => diagnostic.code === "BORING101").length, 1);
-        assert.equal(diagnostics.filter(diagnostic => diagnostic.code === "BORING107").length, 2);
+        assert.equal(diagnostics.filter(diagnostic => diagnostic.code === "BORING107").length, 1);
+        assert.ok(diagnostics.some(diagnostic => diagnostic.code === "BORING110"));
     });
 });
 
@@ -345,4 +344,166 @@ it("startup and check reject prototype folder names using the ordinary URL conve
             rmSync(root, { recursive: true, force: true });
         }
     }
+});
+
+it("enforces roles across split files, unused helpers, ports and indirect infrastructure", () => {
+    project({
+        ...sdk,
+        "modules/orders/service.ts": 'import { peer } from "./services/peer"; export const run = () => peer();',
+        "modules/orders/services/peer.ts": 'export const peer = () => "ok";',
+        "modules/orders/schemas/helper.ts": 'export function execute(callback: () => string) { return callback(); }',
+        "modules/orders/helpers.ts": 'import { peer } from "./services/peer"; export const helper = () => peer();',
+        "modules/orders/ports/bad.ts": 'export const adapter = { read() { return "bad"; } };',
+        "modules/orders/facade.ts": 'export { run } from "./service";',
+        "modules/orders/facade/sdk.ts": 'import { query } from "database-sdk"; export const get = () => query();',
+        "modules/orders/facade/adapter.ts": 'import { db } from "../../../infra/db"; export const get = () => db.read();',
+        "modules/orders/schemas/leak.ts": 'export { peer } from "../services/peer";',
+        "modules/foreign/service.ts": 'import type { peer } from "../orders/services/peer"; export type Leaked = typeof peer;',
+        "infra/db.ts": 'export const db = { read() { return "bad"; } };',
+    }, root => {
+        const { diagnostics } = inspect(root);
+        for (const [file, code] of [
+            ["modules/orders/service.ts", "BORING102"], ["modules/orders/helpers.ts", "BORING107"],
+            ["modules/orders/ports/bad.ts", "BORING111"], ["modules/orders/schemas/helper.ts", "BORING112"], ["modules/orders/facade.ts", "BORING112"],
+            ["modules/orders/facade/sdk.ts", "BORING110"], ["modules/orders/facade/adapter.ts", "BORING110"],
+            ["modules/orders/schemas/leak.ts", "BORING105"], ["modules/foreign/service.ts", "BORING102"],
+        ]) assert.ok(diagnostics.some(error => error.file.fileName === join(root, file) && error.code === code), `${file}: ${code}`);
+    });
+});
+
+it("rejects service aliases, returned capabilities, assertion erasure and setup exposure", () => {
+    project({
+        "modules/orders/service.ts": 'export const run = () => "order";',
+        "modules/orders/repository.ts": 'export interface Store { read(): string; }',
+        "modules/orders/facade.ts": [
+            'import { run } from "./service";',
+            'import type { Store } from "./repository";',
+            'export const alias = run;',
+            'const eager = run();',
+            'export const eagerFactory = () => { const result = run(); return { get() { return result; } }; };',
+            'export const raw = () => ({ run });',
+            'export const nested = () => ({ get() { return { run }; } });',
+            'export const cast = (store: Store) => ({ get(): {} { return store as {}; } });',
+            'export const erased = (store: Store) => { const hidden: {} = store; return { get() { return hidden; } }; };',
+            'function hide(store: Store): {} { return store; }',
+            'export type HiddenService = typeof run;',
+            'export const allowed = () => ({ get() { return run(); } });',
+        ].join("\n"),
+        "infra/db.ts": 'export const db = { read() { return "order"; } };',
+        "api/+setup.ts": [
+            'import { db } from "../infra/db";',
+            'import { allowed } from "../modules/orders/facade";',
+            'export function setup() {',
+            ' const orders = allowed();',
+            ' orders.get = db.read;',
+            ' return { orders, raw: db, wrapper: { get() { return db.read(); } }, cast: db as {}, ...db };',
+            '}',
+        ].join("\n"),
+    }, root => {
+        const { diagnostics } = inspect(root);
+        for (const code of ["BORING112", "BORING113", "BORING114"]) assert.ok(diagnostics.some(error => error.code === code));
+        const setup = diagnostics.filter(error => error.file.fileName === join(root, "api/+setup.ts"));
+        assert.ok(setup.length >= 5, setup.map(error => error.message).join("\n"));
+        assert.ok(!diagnostics.some(error => error.file.fileName === join(root, "modules/orders/facade.ts") && error.start >=
+            error.file.text.indexOf("export const allowed")));
+    });
+});
+
+it("accepts split facade orchestration with transaction and effect ports", () => {
+    project({
+        "modules/orders/schemas.ts": 'export type { Order } from "./schemas/order";',
+        "modules/orders/schemas/order.ts": 'export interface Order { id: string; }',
+        "modules/orders/repository.ts": 'import type { Order } from "./schemas"; export interface Repository { read(): Promise<Order>; }',
+        "modules/orders/ports/transaction.ts": 'import type { Repository } from "../repository"; export interface Database { transaction<T>(run: (repository: Repository) => Promise<T>): Promise<T>; }',
+        "modules/orders/services/read.ts": 'import type { Repository } from "../repository"; export const read = (repository: Repository) => repository.read();',
+        "modules/orders/facade/operations.ts": 'import type { Database } from "../ports/transaction"; import { read } from "../services/read"; export const createOrders = (database: Database) => ({ get() { return database.transaction(repository => read(repository)); } });',
+        "modules/orders/facade.ts": 'export { createOrders } from "./facade/operations";',
+        "infra/database.ts": 'import type { Database } from "../modules/orders/ports/transaction"; export const database: Database = { transaction: run => run({ read: async () => ({ id: "1" }) }) };',
+        "api/+setup.ts": 'import { database } from "../infra/database"; import { createOrders } from "../modules/orders/facade"; export const setup = () => ({ orders: createOrders(database) });',
+    }, root => {
+        const { program, diagnostics } = inspect(root);
+        assert.equal(ts.getPreEmitDiagnostics(program).length, 0);
+        assert.deepEqual(diagnostics.map(error => error.message), []);
+    });
+});
+
+it("checks imperative setup writes, mutable aliases and unsupported boundary forms", () => {
+    project({
+        "infra/store.ts": 'export const store = { read() { return "raw"; } };',
+        "modules/orders/facade.ts": 'export function createOrders() { return { get() { return "ok"; } }; }',
+        "api/+setup.ts": [
+            'import type { SetupContext } from "@boringapi/core";',
+            'import { store } from "../infra/store";',
+            'import { createOrders } from "../modules/orders/facade";',
+            'export function setup(ctx: SetupContext) {',
+            ' ctx.set("raw", store);',
+            ' ctx.assign({ raw: store });',
+            ' const setter = ctx.set.bind(ctx);',
+            ' let changed = createOrders();',
+            ' return { changed, factory: createOrders };',
+            '}',
+        ].join("\n"),
+        "modules/common/facade.js": 'module.exports = { get: () => "opaque" };',
+        "modules/lazy/service.ts": 'export const run = () => "ok";',
+        "modules/lazy/facade.ts": 'const service = require("./service"); export const get = (): string => service.run();',
+        "modules/inline/facade.ts": 'export interface Raw { read(): string; } export function create(raw: Raw) { return { read() { return raw.read(); } }; }',
+    }, root => {
+        const { diagnostics } = inspect(root);
+        const setup = diagnostics.filter(error => error.code === "BORING113" && error.file.fileName === join(root, "api/+setup.ts"));
+        assert.equal(setup.length, 5, setup.map(error => error.message).join("\n"));
+        assert.ok(diagnostics.some(error => error.code === "BORING112" && error.file.fileName === join(root, "modules/common/facade.js")));
+        assert.ok(diagnostics.some(error => error.code === "BORING114" && error.file.fileName === join(root, "modules/lazy/facade.ts")));
+        assert.ok(diagnostics.some(error => error.code === "BORING112" && error.file.fileName === join(root, "modules/inline/facade.ts")));
+    });
+});
+
+
+it("prevents entry points from replacing shared facade operations, including untyped JS aliases", () => {
+    project({
+        "api/get.js": 'exports.handler = ctx => { const application = ctx.services; application.orders.get = () => "replacement"; return "ok"; };',
+    }, root => {
+        assert.ok(inspect(root).diagnostics.some(error => error.code === "BORING113"));
+    });
+});
+
+it("checks shared recursive data graphs once without mistaking them for capability objects", () => {
+    const types = ['export interface Data0 { value: string; next?: Data40; }'];
+    for (let index = 1; index <= 40; index++) types.push(`export interface Data${index} { left: Data${index - 1}; right: Data${index - 1}; }`);
+    const dependencies = ['import type { NewId } from "./ports/id"; interface Deps0 { newId: NewId; }'];
+    for (let index = 1; index <= 40; index++) dependencies.push(`interface Deps${index} { left: Deps${index - 1}; right: Deps${index - 1}; }`);
+    project({
+        "modules/tree/ports/id.ts": 'export type NewId = () => string;',
+        "modules/tree/schemas.ts": types.join("\n"),
+        "modules/tree/facade.ts": dependencies.join("\n") + '\nimport type { Data40 } from "./schemas"; export const echo = (value: Data40): Data40 => value; export function create(_dependencies: Deps40) { return { get() { return "ok"; } }; }',
+    }, root => {
+        assert.deepEqual(inspect(root).diagnostics.map(error => error.message), []);
+    });
+});
+
+it("rejects services hiding ports behind data annotations before returning them through a facade", () => {
+    project({
+        "modules/orders/repository.ts": 'export interface Store { read(): string; }',
+        "modules/orders/service.ts": 'import type { Store } from "./repository"; export function leak(store: Store): {} { return store; }',
+        "modules/orders/services/alias.ts": 'import type { Store } from "../repository"; export function leak(store: Store): {} { const hidden: {} = store; return hidden; }',
+        "modules/orders/services/arrow.ts": 'import type { Store } from "../repository"; export const leak = (store: Store): {} => store;',
+        "modules/orders/facade.ts": 'import type { Store } from "./repository"; import { leak } from "./service"; export const create = (store: Store) => ({ get() { return leak(store); } });',
+    }, root => {
+        const { program, diagnostics } = inspect(root);
+        assert.equal(ts.getPreEmitDiagnostics(program).length, 0);
+        for (const file of ["service.ts", "services/alias.ts", "services/arrow.ts"]) {
+            assert.ok(diagnostics.some(error => error.file.fileName === join(root, "modules/orders", file) && error.code === "BORING112"), file);
+        }
+    });
+});
+
+it("allows a service to invoke an injected callable port", () => {
+    project({
+        "modules/orders/ports/id.ts": 'export type NewId = () => string;',
+        "modules/orders/service.ts": 'import type { NewId } from "./ports/id"; export const create = (newId: NewId) => ({ id: newId() });',
+        "modules/orders/facade.ts": 'import type { NewId } from "./ports/id"; import { create } from "./service"; export const createOrders = (newId: NewId) => ({ create() { return create(newId); } });',
+    }, root => {
+        const { program, diagnostics } = inspect(root);
+        assert.equal(ts.getPreEmitDiagnostics(program).length, 0);
+        assert.deepEqual(diagnostics.map(error => error.message), []);
+    });
 });

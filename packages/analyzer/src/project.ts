@@ -2,7 +2,7 @@ import ts from "typescript";
 import { existsSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { generateTypes, generateClientContracts } from "@boringapi/typegen";
-import { architectureFiles, checkArchitecture } from "./architecture";
+import { architectureFiles, analyzeArchitecture } from "./architecture";
 import { aliasDiagnostics, compilerOptions, readConfiguration } from "@boringapi/compiler";
 
 /** Refresh browser contracts with type analysis only when the application uses them. */
@@ -31,8 +31,8 @@ export function analyzeProject(root: string, apiDirectory: string, projectFile?:
         program = ts.createProgram({ rootNames: fileNames, options, oldProgram: program });
     }
     const diagnostics = [...configuration.errors, ...ts.getPreEmitDiagnostics(program), ...aliasDiagnostics(program, configuration.options)];
-    const architecture = checkArchitecture(program, generated.apiDirectory, generated.generatedRoot);
-    return { ...generated, projectRoot: root, program, configuration, diagnostics, architecture };
+    const model = analyzeArchitecture(program, generated.apiDirectory, generated.generatedRoot);
+    return { ...generated, projectRoot: root, program, configuration, diagnostics, architecture: model.diagnostics, roles: model.sources };
 }
 
 export type AnalyzedProject = ReturnType<typeof analyzeProject>;

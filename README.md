@@ -7,7 +7,7 @@ operations discoverable and rejects forbidden dependencies with static checks.
 Its goal is to keep a backend consistent as people and agents repeatedly extend it.
 It uses TypeScript, Express 4 and Zod 3.
 
-- **Known places for behavior:** facades coordinate use cases, services hold business rules, and infrastructure implements storage and external integrations.
+- **Checked roles:** facades coordinate use cases, services use injected ports, and infrastructure implements them. Same-module imports and setup exposure follow the [role contract](docs/architecture.md).
 - **Enforced boundaries:** mandatory checks reject imports that bypass the supported application boundaries, including unused source and aliases.
 - **Discover before extending:** inspect existing operations, schemas and entry points; generators reuse the same checked application model.
 - **Typed HTTP conventions:** filesystem routes and named hooks describe requests, validation, identity and responses.
@@ -58,7 +58,7 @@ api/
 modules/orders/
 ├── facade.ts            public operations and orchestration
 ├── service.ts           private business rules
-├── repository.ts        private storage contract when needed
+├── repository.ts        type-only storage port when needed
 └── schemas.ts           shared Zod contracts
 infra/                   storage and external adapters
 ```
@@ -74,7 +74,7 @@ export const output = health;
 export const handler: GetHandler = ctx => ctx.services.health.get();
 ```
 
-`$modules` and `$infra` resolve beside the selected API directory. `./$types` is generated from your application. The [Agent guide](docs/agent-guide.md#a-complete-small-feature) shows the schema, facade and setup behind this route.
+`$modules` and `$infra` resolve beside the selected API directory. `./$types` is generated from your application. The [Agent guide](docs/agent-guide.md#a-complete-small-feature) shows the schema, service, facade and setup behind this route.
 
 Add `+middleware.ts`, `+envelope.ts` or `+error.ts` where shared behavior belongs. Middleware runs from root to leaf; the nearest envelope or error template applies. Input is validated before the handler and output before the envelope. See [hooks and request flow](docs/reference.md).
 

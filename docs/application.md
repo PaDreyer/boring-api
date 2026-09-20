@@ -135,12 +135,10 @@ example has no tenant or ownership model.
 
 ## Application modules
 
-This reference describes the current implementation. The accepted
-[project vision](vision.md) defines the complete backend architecture; the
-[roadmap](roadmap.md#milestone-1--enforce-one-application-architecture) tracks the
-stricter role and invocation rules still to implement. In particular, today's
-same-module private-file access and module-to-infrastructure imports are known
-enforcement gaps, not the intended architectural freedom for new code.
+The [role contract](architecture.md) defines the shared catalog, dependency and
+invocation matrix, splitting conventions and migration. The checker enforces these
+boundaries within modules as well as between them. The [vision](vision.md) and
+[roadmap](roadmap.md) distinguish this foundation from future runtimes and lifecycle.
 
 Use this structure when building an application with Boring API:
 
@@ -178,20 +176,26 @@ reserved `+` files.
 | `modules/<name>/facade.ts` | Expose operations with explicit inputs and actor identity. Check access for every caller and coordinate private services, transactions and dependencies. |
 | `modules/<name>/schemas.ts` | Share Zod schemas and inferred data types. Keep contracts independent of server clients so browser code can reuse them later. |
 | `modules/<name>/service.ts` | Implement domain rules and use cases without HTTP or database driver imports. Keep this file private to its module. |
-| `modules/<name>/repository.ts` | Define the narrow storage port needed by the service when the domain persists data. Keep the port private and expose its type through the facade for infrastructure adapters. |
-| `modules/<name>/internal/` | Optional additional private implementation details when the service needs to be split. |
+| `modules/<name>/repository.ts` | Define the narrow storage port needed by the service when the domain persists data. Export types only. Setup and adapters import this contract directly; other modules cannot. |
+| `facade/`, `services/`, `schemas/`, `ports/` inside the module | Split the corresponding role into named files; every part retains that role’s restrictions. Generic `internal/` and helper files are rejected. |
 | `infra/` | Implement repository ports and external clients. Keep SQL and SDK calls out of the facade and service. |
 | `+setup.ts` | Create infrastructure and inject it into facades once per application. Return facades through the existing `ctx.services` contract. |
 
-Other modules use a module's `facade.ts` and `schemas.ts`, never its internal files.
-`boring check` rejects imports of a module's private `service.ts` from
-routes, setup, infrastructure, browser code, server pages and other modules,
-including type-only imports, aliases and re-exports. A service is imported only
-inside its owning module; callers use the public facade.
-Keep dependencies acyclic. A facade can start as a single factory function; no
-framework base class or decorator is required. Put domain behavior in a private
-service and define a repository port when storage is needed. Before adding a new
-module, look for the existing facade and service that own the operation.
+Other modules use public root facades and schemas. Only the owning facade imports
+and invokes services. Services cannot import peer services, facades, concrete
+infrastructure, packages other than Zod, or Node APIs. They receive effect/storage
+ports through arguments. Facades can import Core and Zod, their own role parts,
+services and port types, and other public facades/schemas. Business modules cannot
+import concrete infrastructure, including type-only dependencies and aliases.
+Keep dependencies acyclic. Adapters import public schemas and port types directly.
+
+Public facades export named functions and types. Factories return explicit objects
+of locally owned operations; facade parts may re-export other parts of that facade.
+Operations accept/return data, never callbacks or nested callable capabilities.
+Unknown and `any` contracts require validation/narrowing before crossing the boundary.
+Factory parameters describe data, own ports or public facades. Re-exporting services,
+returning raw implementations, mutable composition and capability-erasing assertions
+are diagnosed. These structural rules apply to unused exports as well.
 
 For example, the orders module shares these contracts between its create and get
 endpoints:
@@ -212,7 +216,7 @@ export type Order = z.infer<typeof order>;
 
 The example's `createOrders(repository)` facade exposes `create({ input, actor })`
 and `get({ id, actor })`. It checks `orders:create` and `orders:read`, then calls
-its private service. The service validates inputs, constructs orders, uses the
+its private service. The service validates inputs, constructs orders using the injected ID capability, uses the
 repository port and raises a domain error for a missing order. The facade maps
 that error to `HttpError(404, "Order not found")` for the normal Boring API error
 pipeline. Neither facade nor service depends on an Express request or response.
@@ -254,30 +258,35 @@ modules are checked too. It does not execute setup, hooks, routes or dependencie
 | Method files such as `get.ts` | Public `schemas` modules, type-only generated `$types`, `@boringapi/core` and `zod`. Call business operations through `ctx.services`. Other packages and Node builtins belong behind a facade. |
 | Hooks other than `+setup` | Public facades/schemas, Boring API, Zod and Node helpers. Initialize SDKs and infrastructure in `+setup` and expose them through facades. |
 | Root `+setup` | Public facades/schemas, infrastructure, server page adapters, packages and Node builtins. |
-| A module's facade or private implementation | Its own files, other modules' public facades/schemas, infrastructure, packages and Node builtins. |
+| Facades and their `facade/` parts | Own services, port types, schemas and facade parts; other public facades/schemas; Core and Zod. |
+| Services and `services/` parts | Public/own schemas, own port types, Zod and Core types. No peer services, facades, concrete infrastructure, SDKs or Node APIs. |
+| Repository and `ports/` files | Type-only contracts using schemas, own ports and Core types; no runtime code. |
 | Public `schemas` | Other public schemas, Zod and type-only Boring API imports. Keep runtime server code out of shared contracts. |
-| Infrastructure | Other infrastructure, public schemas, packages and Node builtins. Type-only facade imports may describe an adapter contract; infrastructure must not call business facades. |
+| Infrastructure | Other infrastructure, public schemas, packages and Node builtins. Import repository/port types directly; even type-only facade imports are rejected. |
 | Browser source in `web/client` | Other browser files, public schemas, browser-appropriate packages, `@boringapi/core/client` and type-only generated `$client`. No local server modules, Node builtins or runtime imports from the core server entry point or development packages (`compiler`, `typegen`, `analyzer`, `build`, `scaffold`, `dev`, `cli`), including subpaths and aliases. |
 | Server pages in `web/server` | Other server page files, public facades/schemas, Boring API and Zod. Setup injects existing facades. No infrastructure or SDK imports; modules and infrastructure cannot import pages. |
 
 Routes and hooks are entry points: application files must not import them.
 Other modules cannot access a module's private files, including via a TypeScript
-path alias or a re-export. A facade may re-export its **own** implementation files
-to make selected operations public. Shared server helpers belong in a named module
+path alias or a re-export. A facade may re-export only its **own facade parts**, never services.
+Schema parts are public only through root schemas. Port types are shared with
+setup and adapters through their explicit files. Shared server helpers belong in a named module
 or infrastructure, rather than an additional `utils` or `services` directory.
 
 The checker resolves import targets using TypeScript and real filesystem paths.
 It checks ES imports/re-exports, literal `import(...)`, literal `require(...)`,
 `import = require(...)` and import types, including JavaScript when `checkJs` is
-disabled. Computed module paths, aliased loaders, `require.resolve` and custom
+disabled. Public operation/setup boundaries require explicit ES exports and
+checkable types (TypeScript or JSDoc). Service references require named ES imports;
+CommonJS and lazy service loading receive an unsupported-boundary diagnostic. Computed module paths, aliased loaders, `require.resolve` and custom
 loaders through `node:module` are rejected because their dependencies are not
 fully checked by this model. Unresolved imports are errors too.
 
 Runtime dependencies between modules must be acyclic, including dependencies
-through private files or infrastructure. Use declaration-level `import type` or
-`export type` for erased dependencies; these still respect import boundaries but
-do not create runtime cycle edges. Other imports, including inline type
-specifiers, are conservatively treated as runtime dependencies.
+through private files or infrastructure. Declaration-level `import type` and
+`export type`, and clauses consisting entirely of inline `type` specifiers, are
+erased dependencies. They still respect import boundaries but do not create runtime
+cycle edges. Mixed, empty and side-effect imports retain runtime edges.
 
 Diagnostics have stable codes and source locations:
 
@@ -292,17 +301,31 @@ Diagnostics have stable codes and source locations:
 | `BORING107` | Dependency outside the application structure or misplaced module file. |
 | `BORING108` | Invalid `$modules`/`$infra`/`$client` path or an editor alias mapping that differs from the application convention. |
 | `BORING109` | Server page imports infrastructure/SDKs, or server code outside setup imports pages. |
+| `BORING110` | Business role imports concrete infrastructure, an SDK or a Node API. |
+| `BORING111` | Port contains runtime implementation. |
+| `BORING112` | Public export, operation or dependency contract exposes an implementation/capability or has an unchecked type. |
+| `BORING113` | Invalid setup exposure or dynamic/mutable capability composition. |
+| `BORING114` | Service value escapes its owning facade call, peer invocation, or unsupported service loading. |
 
 For endpoint violations, diagnostics also list callable operations inferred from
 `+setup` when available, such as `ctx.services.orders.get`, with their declaration
 locations. No additional service registry or metadata class is required.
 
-These are static import rules, not a JavaScript sandbox or a semantic duplicate
-detector. They do not track values passed through `ctx.services`, global I/O calls
-or the runtime behavior of installed packages. Keep infrastructure private to
-facades and select browser-compatible dependencies for browser builds. The
-reference uses React, but the browser transport and import boundaries are
-independent of the UI framework.
+Setup returns an explicit object of traced facade/page factory results, public
+operations and data. Raw adapters, services, inline wrappers and spreads are
+rejected. Const aliases retain their origin; class instances and dynamic object
+construction are not public facade contracts. Imperative `ctx.set`/`ctx.assign`
+writes remain untyped but follow the same exposure restrictions. Call setters
+directly; destructuring, renamed bindings and assignment aliases are rejected.
+Schema annotations and calls accepting data must not erase callable capabilities.
+Export service operations as named functions rather than objects of methods.
+
+These checks establish source roles, dependency edges and supported value boundaries.
+They are not a JavaScript sandbox or a semantic duplicate detector. Global I/O,
+arbitrary reflection and installed-package behavior are not made safe by a passed
+check. Correct permissions, resource ownership and execution-state isolation still
+need behavior tests; lifecycle is the next roadmap milestone. Do not use casts,
+reflection or global side channels to evade the structural contract.
 
 Run `boring check` in development and CI. Startup still validates API structure
 and runtime hook contracts. `start` and `createApp` do not run static checks;

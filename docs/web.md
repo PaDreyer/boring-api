@@ -17,7 +17,7 @@ api/orders/[id]/get.ts                read through the same facade
 api/pages/orders/[id]/get.ts          return rendered HTML, envelope = false
 modules/orders/facade.ts             permissions and transaction orchestration
 modules/orders/service.ts            private order rules and use cases
-modules/orders/repository.ts         private storage and transaction ports
+modules/orders/repository.ts         type-only storage and transaction ports
 modules/orders/schemas.ts            shared Zod contracts
 infra/db/database.ts                 one PostgreSQL connection pool and adapter
 infra/db/migrations.ts               the database schema's migration history

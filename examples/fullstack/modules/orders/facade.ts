@@ -5,7 +5,6 @@ import type { CreateOrder, Order } from "./schemas";
 import type { OrderDatabase } from "./repository";
 import { createOrder, getOrder, OrderNotFoundError } from "./service";
 
-export type { OrderDatabase, OrderRepository } from "./repository";
 
 /** Both HTTP and server pages call these operations with an explicit actor. */
 export function createOrders(database: OrderDatabase) {

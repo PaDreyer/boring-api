@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { createOrder as createOrderSchema, orderParams } from "./schemas";
 import type { CreateOrder, Order } from "./schemas";
 import type { OrderRepository } from "./repository";
@@ -10,7 +9,7 @@ export class OrderNotFoundError extends Error {
 
 export async function createOrder(input: CreateOrder, actorId: string, repository: OrderRepository): Promise<Order> {
     const data = createOrderSchema.parse(input);
-    const order = { ...data, id: randomUUID() };
+    const order = { ...data, id: repository.newId() };
     await repository.insert(order);
     await repository.recordCreation(order, actorId);
     return order;

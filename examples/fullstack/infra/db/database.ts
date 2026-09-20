@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import type { PoolClient, PoolConfig } from "pg";
-import type { OrderDatabase, OrderRepository } from "$modules/orders/facade";
+import type { OrderDatabase, OrderRepository } from "$modules/orders/repository";
 import { order } from "$modules/orders/schemas";
 import { migrations } from "./migrations";
 
@@ -28,6 +28,7 @@ export function createDatabase(config: PoolConfig) {
     const database: OrderDatabase = {
         transaction: operation => transaction(async client => {
             const store: OrderRepository = {
+                newId: randomUUID,
                 async insert(value) { await client.query("INSERT INTO orders (id, item, quantity) VALUES ($1, $2, $3)", [value.id, value.item, value.quantity]); },
                 async recordCreation(value, actorId) { await client.query("INSERT INTO order_events (order_id, actor_id) VALUES ($1, $2)", [value.id, actorId]); },
                 async find(id) {

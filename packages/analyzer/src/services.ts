@@ -1,6 +1,7 @@
 import { basename, dirname, resolve } from "path";
 import ts from "typescript";
 import { declarationOf, exported, symbolType } from "@boringapi/compiler";
+import { applicationRole } from "@boringapi/core/conventions";
 
 function property(name: string): string {
     return /^[A-Za-z_$][\w$]*$/.test(name) ? `.${name}` : `[${JSON.stringify(name)}]`;
@@ -53,7 +54,9 @@ export function serviceSources(program: ts.Program, apiDirectory: string): Servi
         const operations = (direct ? [service] : value.getProperties()).flatMap(operation => {
             if (!isPublicMember(checker, operation)) return [];
             const operationType = symbolType(checker, operation, setup);
-            if (!operationType.getCallSignatures().length) return [];
+            const signatures = operationType.getCallSignatures();
+            if (!signatures.length || !signatures.every(signature => signature.declaration &&
+                ["facade", "page"].includes(applicationRole(apiDirectory, signature.declaration.getSourceFile().fileName).role))) return [];
             return [{ name: operation.name, access: direct ? access : `${access}${property(operation.name)}`,
                 symbol: operation, type: operationType, declaration: declarationOf(checker, operation) }];
         }).sort((a, b) => a.name.localeCompare(b.name));

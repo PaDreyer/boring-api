@@ -1,14 +1,9 @@
 import { requirePermissions } from "@boringapi/core";
 import type { Actor, AuthorizationRule, Permission } from "./schemas";
 
-/** Roles bundle permissions; no role receives implicit or wildcard access. */
-export const rolePermissions = {
-    viewer: ["orders:read"],
-    creator: ["orders:create"],
-    admin: ["orders:read", "orders:create"],
-} as const satisfies Record<string, readonly Permission[]>;
-
-export type Role = keyof typeof rolePermissions;
+import { rolePermissions } from "./schemas";
+import type { Role } from "./schemas";
+export type { Role } from "./schemas";
 
 export function permissionsForRoles(roles: readonly Role[]): Permission[] {
     const granted = new Set<Permission>();

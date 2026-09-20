@@ -12,14 +12,14 @@ The package entry point is `README.md`; lead it with this architectural promise 
 - Give every responsibility a named, discoverable role and define its imports, exports, calls and lifetime. Prefer predictable decomposition into convention-following files. Generic private/internal/helper code must not become an architectural escape hatch.
 - Documentation alone does not enforce a pattern. Deliver the shared convention model, checks and bypass tests, inspection, generation, runtime behavior where needed, and a reference example together. Checks remain mandatory.
 - Treat current permissive behavior as an implementation gap when it conflicts with the vision. Do not preserve it as a design principle, widen rules to make an example pass, or claim a target rule is already enforced.
-- Work through the roadmap's dependency order. Keep incomplete acceptance criteria open and update status with concrete implementation and test evidence. The next milestone is the complete role and enforcement model, before expanding to additional runtimes.
+- Work through the roadmap's dependency order. Keep incomplete acceptance criteria open and update status with concrete implementation and test evidence. The role-enforcement milestone and its audit corrections are complete; the next milestone is the common execution lifecycle, before additional runtimes.
 
 ## Where things belong
 
 - `packages/core/src/core`: discovery, request pipeline, context, shared types and errors.
 - `packages/core/src`: the reusable library only. Do not add application routes or a fixed server here.
 - `examples/basic/api`: a separate example consumer. A route is `<URL folders>/<HTTP method>.ts` below the consumer's chosen API directory.
-- Consumer `modules/<name>/facade.ts` and `schemas.ts` are public entry points; other module files are private. Privacy does not grant access across roles: the owning facade invokes services, services use ports, and setup injects concrete adapters. The roadmap tracks gaps in enforcing this model. Sibling `infra/` holds adapters, `web/client/` marks browser source, and `web/server/` holds server presentation adapters wired by setup.
+- Consumer `modules/<name>/facade.ts` and `schemas.ts` are public entry points; other module files are private. Privacy does not grant access across roles: the owning facade invokes services, services use ports, and setup injects concrete adapters. The shared role contract in `docs/architecture.md` defines enforced imports and public operation shapes. Split code into `facade/`, `services/`, `schemas/` and `ports/`; no generic internal/helper role exists. Sibling `infra/` holds adapters, `web/client/` marks browser source, and `web/server/` holds server presentation adapters wired by setup.
 - Use `$modules/<name>/...` and `$infra/<path>` for imports across those directories where architecture rules permit them. Both aliases follow the selected API's sibling directories through editor, source compiler and build resolution; same-module imports can stay relative.
 - `+setup.ts` and `+auth.ts`: root-only setup and authentication/authorization.
 - `+middleware.ts`: available at any URL folder; inherited from root to leaf.

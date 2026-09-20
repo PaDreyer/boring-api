@@ -27,12 +27,14 @@ function fixture() {
     symlinkSync(join(repository, "node_modules"), join(root, "node_modules"), "dir");
     write(root, "api/+setup.ts", `
 import type { SetupHandler } from "./$types";
+import { createUsers } from "../modules/users/facade";
 throw new Error("hooks must not execute during type generation");
 export const setup = ((ctx) => {
     ctx.logger.info("setup");
-    return { settings: { name: "app", limit: 3 }, users: { find: (id: string) => ({ id }) } };
+    return { settings: { name: "app", limit: 3 }, users: createUsers() };
 }) satisfies SetupHandler;
 `);
+    write(root, "modules/users/facade.ts", 'export const createUsers = () => ({ find: (id: string) => ({ id }) });');
     write(root, "api/+auth.ts", `
 import type { AuthenticationContext, AuthorizationHandler } from "./$types";
 export async function authenticate(ctx: AuthenticationContext) {
@@ -170,7 +172,7 @@ export function handler(ctx: MiddlewareContext) {
 function checked(root: string) {
     const project = analyzeProject(root, "api");
     assert.equal(project.diagnostics.length, 0, ts.formatDiagnostics(project.diagnostics, formatHost(root)));
-    assert.deepEqual(project.architecture, []);
+    assert.deepEqual(project.architecture.map(error => error.message), []);
     return project;
 }
 
@@ -228,7 +230,7 @@ it("refreshes hook types when application return types change", () => {
     const root = fixture();
     try {
         checked(root);
-        const setup = join(root, "api/+setup.ts");
+        const setup = join(root, "modules/users/facade.ts");
         writeFileSync(setup, readFileSync(setup, "utf8").replace('({ id })', '({ id: 42 })'));
         const project = analyzeProject(root, "api");
         assert.ok(project.diagnostics.some(error => error.file?.fileName === join(root, "api/+auth.ts") && error.code === 2322), ts.formatDiagnostics(project.diagnostics, formatHost(root)));

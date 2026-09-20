@@ -5,7 +5,6 @@ import type { CreateOrder, Order } from "./schemas";
 import type { OrderRepository } from "./repository";
 import { createOrder, getOrder, OrderNotFoundError } from "./service";
 
-export type { OrderRepository } from "./repository";
 
 export type OrderActor = Actor;
 

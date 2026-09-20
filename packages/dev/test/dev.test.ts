@@ -69,49 +69,51 @@ it("the development server reloads sibling modules and infra, including newly cr
         // Adding sibling roots alone must be detected, without any API file change.
         await change(() => {
             mkdirSync(module, { recursive: true });
-            writeFileSync(join(module, "facade.js"),
-                'exports.read = () => require("$infra/store").value;\n');
+            writeFileSync(join(module, "repository.ts"), 'export interface Store { read(): string; }');
+            writeFileSync(join(module, "service.ts"), 'import type { Store } from "./repository"; export const read = (store: Store) => store.read();');
+            writeFileSync(join(module, "facade.ts"),
+                'import type { Store } from "./repository"; import { read } from "./service"; export const createOrders = (store: Store) => ({ read() { return read(store); } });');
         }, "initial");
         await change(() => {
             mkdirSync(infra);
-            writeFileSync(join(infra, "store.js"), 'exports.value = "stored";\n');
+            writeFileSync(join(infra, "store.ts"), 'export const createStore = () => ({ read() { return "stored"; } });\n');
         }, "initial");
 
         // Connect the new facade, then change only its dependencies.
         await change(() => {
-            writeFileSync(join(api, "+setup.js"),
-                'exports.setup = () => ({ orders: require("$modules/orders/facade") });\n');
+            writeFileSync(join(api, "+setup.ts"),
+                'import { createOrders } from "$modules/orders/facade"; import { createStore } from "$infra/store"; export const setup = () => ({ orders: createOrders(createStore()) });\n');
             writeFileSync(join(api, "get.js"),
                 'exports.handler = ctx => ({ value: ctx.services.orders.read() });\n');
         }, "stored");
 
         await change(() => {
-            writeFileSync(join(infra, "store.js"), 'exports.value = "changed storage";\n');
+            writeFileSync(join(infra, "store.ts"), 'export const createStore = () => ({ read() { return "changed storage"; } });\n');
         }, "changed storage");
         await change(() => {
-            writeFileSync(join(module, "facade.js"),
-                'exports.read = () => "facade: " + require("$infra/store").value;\n');
+            writeFileSync(join(module, "facade.ts"),
+                'import type { Store } from "./repository"; import { read } from "./service"; export const createOrders = (store: Store) => ({ read() { return "facade: " + read(store); } });\n');
         }, "facade: changed storage");
 
-        const internal = join(module, "internal");
+        const internal = join(module, "services");
         await change(() => {
             mkdirSync(internal);
-            writeFileSync(join(internal, "label.js"), 'exports.value = "nested";\n');
-            writeFileSync(join(module, "facade.js"),
-                'exports.read = () => require("./internal/label").value;\n');
+            writeFileSync(join(internal, "read.ts"), 'export const read = () => "nested";\n');
+            writeFileSync(join(module, "facade.ts"),
+                'import { read } from "./services/read"; import type { Store } from "./repository"; export const createOrders = (_store: Store) => ({ read() { return read(); } });\n');
         }, "nested");
         await change(() => {
-            writeFileSync(join(internal, "label.js"), 'exports.value = "nested change";\n');
+            writeFileSync(join(internal, "read.ts"), 'export const read = () => "nested change";\n');
         }, "nested change");
 
         // Recreating a watched directory must attach to its new filesystem entry.
         await change(() => {
             rmSync(internal, { recursive: true });
             mkdirSync(internal);
-            writeFileSync(join(internal, "label.js"), 'exports.value = "recreated";\n');
+            writeFileSync(join(internal, "read.ts"), 'export const read = () => "recreated";\n');
         }, "recreated");
         await change(() => {
-            writeFileSync(join(internal, "label.js"), 'exports.value = "still watched";\n');
+            writeFileSync(join(internal, "read.ts"), 'export const read = () => "still watched";\n');
         }, "still watched");
 
         const previous = ports().length;
@@ -124,11 +126,11 @@ it("the development server reloads sibling modules and infra, including newly cr
 
         // An application's custom shutdown handler must not stall future reloads.
         await change(() => {
-            writeFileSync(join(api, "+setup.js"),
-                'process.on("SIGTERM", () => {}); exports.setup = () => ({ orders: require("$modules/orders/facade") });\n');
+            writeFileSync(join(api, "+setup.ts"),
+                'process.on("SIGTERM", () => {}); import { createOrders } from "$modules/orders/facade"; import { createStore } from "$infra/store"; export const setup = () => ({ orders: createOrders(createStore()) });\n');
         }, "still watched");
         await change(() => {
-            writeFileSync(join(internal, "label.js"), 'exports.value = "forced restart";\n');
+            writeFileSync(join(internal, "read.ts"), 'export const read = () => "forced restart";\n');
         }, "forced restart");
     } finally {
         if (child.exitCode === null && child.signalCode === null) {

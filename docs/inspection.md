@@ -34,18 +34,19 @@ Invalid structure, contracts, types or architecture produce diagnostics on stder
 and exit status 1, with no catalog on stdout. Fix these errors and run inspection
 again. Successful `--json` output is exactly one JSON object on stdout.
 
-### JSON contract, version 1
+### JSON contract, version 2
 
 The root object contains these fields:
 
 | Field | Contents |
 | --- | --- |
-| `schemaVersion` | `1`. Breaking changes to the catalog structure increment this value; readers should ignore additional fields. |
+| `schemaVersion` | `2`. Breaking changes to the catalog structure increment this value; readers should ignore additional fields. |
 | `apiDirectory` | Selected API path relative to the consumer project root. |
 | `setup`, `auth` | Setup and authentication/authorization hook locations, or `null` when absent. |
 | `routes` | Method, URL path, handler location/return types, `input`, `output`, `access`, and effective `hooks`. |
 | `services` | Callable services inferred from the return type of `+setup`, with exact `ctx.services` access expressions and operation signatures. |
 | `modules` | Public facade/schema exports, including callable exports, schemas, values and types. |
+| `roles` | Every classified source file, its role/module/public status, and resolved dependency edges with type-only flags and source offsets. |
 | `unmatchedErrors` | Root error hooks used when no route matches. |
 
 Locations have `{ "file": "modules/orders/facade.ts", "line": 17, "column": 9 }`,
@@ -79,9 +80,10 @@ effective handlers. Selection checks the nearest scope first: exact status,
 then that scope's 500 hook for server errors, then its generic hook, before
 walking upward. A `null` location means the framework's default error response.
 
-Service discovery lists public callable properties of returned service objects and
-directly returned functions. This includes composed objects and the common callable
-properties of object unions. Private and protected methods are excluded, including
-ECMAScript `#private` methods. Values stored only through imperative Map writes
-or hidden behind `any` have no statically discoverable signatures. Inspect the
-reported public entry points when more implementation detail is needed.
+Service discovery lists checked facade/page operations, including explicit objects,
+const aliases and the common operations of conditional factory results. It does not
+promote arbitrary callable setup objects to services. Class instances, dynamic
+composition, raw adapters/services and unchecked boundary types are errors. Both
+the CLI and public `inspectProject` reject projects with check errors. Imperative
+Map writes have no inferred signatures; inspect the reported public entries for
+their implementations. The role catalog includes unused files and split role parts.

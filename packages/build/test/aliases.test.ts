@@ -44,20 +44,23 @@ function fixture() {
         'export const label = "aliased";',
         'export type Order = z.infer<typeof order>;',
     ].join("\n"));
-    write(root, "app/modules/orders/internal/read.ts", [
+    write(root, "app/modules/orders/facade/read.ts", [
         'import type { Order } from "$modules/orders/schemas";',
         'export const read = (id: string): Order => ({ id, label: "aliased" });',
     ].join("\n"));
-    write(root, "app/modules/orders/internal/model.d.ts", 'export interface Metadata { label: string; }');
-    write(root, "app/modules/orders/internal/equals.ts", 'import schemas = require("$modules/orders/schemas"); export const equals = () => schemas.label;');
+    write(root, "app/modules/orders/schemas/model.d.ts", 'export interface Metadata { label: string; }');
+    write(root, "app/modules/orders/facade/equals.ts", 'import schemas = require("$modules/orders/schemas"); export const equals = () => schemas.label;');
     write(root, "app/modules/orders/facade.ts", [
-        'import { read } from "$modules/orders/internal/read";',
-        'export { read } from "$modules/orders/internal/read";',
+        'import { read } from "$modules/orders/facade/read";',
+        'export { read } from "$modules/orders/facade/read";',
         'export type { Order } from "$modules/orders/schemas";',
         'export type OrderImport = import("$modules/orders/schemas").Order;',
-        'export type { Metadata } from "./internal/model";',
-        'export { equals } from "./internal/equals";',
+        'export type { Metadata } from "./schemas/model";',
+        'export { equals } from "./facade/equals";',
         'export const createOrders = () => ({ read });',
+    ].join("\n"));
+    write(root, "app/infra/loading.ts", [
+        'import schemas = require("$modules/orders/schemas"); export const equals = () => schemas.label;',
         'export const lazy = async () => (await import("$modules/orders/schemas")).label;',
         'export const required = () => require("$modules/orders/schemas").label;',
         'export const moduleRequired = () => module.require("$modules/orders/schemas").label;',
@@ -84,6 +87,22 @@ function checked(root: string) {
     return project;
 }
 
+it("gates inspection and builds on the same setup exposure diagnostics", () => {
+    const root = fixture();
+    write(root, "app/infra/store.ts", 'export const store = { read() { return "raw"; } };');
+    for (const setup of [
+        'export const setup = () => ({ store });',
+        'export function setup(ctx: SetupContext) { const { assign } = ctx; assign.call(ctx, { raw: store }); }',
+    ]) {
+        write(root, "app/http/+setup.ts", `import type { SetupContext } from "@boringapi/core"; import { store } from "$infra/store"; ${setup}`);
+        const project = analyzeProject(root, "app/http");
+        assert.ok(project.architecture.some(error => error.code === "BORING113"));
+        assert.throws(() => inspectProject(project), /check errors/);
+        assert.throws(() => buildProject(project), /check errors/);
+        assert.equal(existsSync(join(root, "output")), false);
+    }
+});
+
 it("checks and inspects aliases, including unused modules, without executing source", () => {
     const root = fixture();
     write(root, "app/modules/unused/facade.ts", 'throw new Error("must not execute"); export const run = () => "ok";');
@@ -91,7 +110,7 @@ it("checks and inspects aliases, including unused modules, without executing sou
     const catalog = inspectProject(project);
     assert.equal(catalog.services[0].operations[0].access, "ctx.services.orders.read");
     assert.equal(catalog.modules.find(module => module.name === "unused")!.facade!.exports[0].name, "run");
-    write(root, "app/modules/unused/facade.ts", 'import { read } from "$modules/orders/internal/read"; export { read };');
+    write(root, "app/modules/unused/facade.ts", 'import { read } from "$modules/orders/facade/read"; export { read };');
     assert.ok(analyzeProject(root, "app/http").architecture.some(error => error.code === "BORING102"));
     write(root, "app/modules/unused/facade.ts", 'export const bad = () => import("$modules/missing/schemas");');
     assert.ok(analyzeProject(root, "app/http").architecture.some(error => error.code === "BORING106"));
@@ -161,7 +180,7 @@ it("reports editor mappings replaced by consumer paths and preserves unrelated a
     writeFileSync(file, JSON.stringify(config));
     project = checked(root);
     assert.deepEqual(project.program.getCompilerOptions().paths!["@local/*"], ["./app/modules/*"]);
-    write(root, "app/http/orders/[id]/get.ts", 'import { read } from "$modules/../modules/orders/internal/read"; export const handler = read;');
+    write(root, "app/http/orders/[id]/get.ts", 'import { read } from "$modules/../modules/orders/facade/read"; export const handler = read;');
     assert.ok(analyzeProject(root, "app/http").diagnostics.some(error => String(error.messageText).includes("BORING108")));
 });
 
@@ -346,8 +365,8 @@ it("uses the source compiler for custom servers and keeps two applications' alia
     const stopFirst = registerTypeScript(join(first, "app/http"));
     const stopSecond = registerTypeScript(join(second, "app/http"));
     try {
-        const a = require(join(first, "app/modules/orders/facade.ts"));
-        const b = require(join(second, "app/modules/orders/facade.ts"));
+        const a = require(join(first, "app/infra/loading.ts"));
+        const b = require(join(second, "app/infra/loading.ts"));
         assert.equal(await a.lazy(), "aliased");
         assert.equal(a.required(), "aliased");
         assert.equal(a.equals(), "aliased");
@@ -366,20 +385,20 @@ it("loads JavaScript companions instead of their declarations in the source comp
     const root = fixture();
     write(root, "app/modules/legacy/schemas.js", 'exports.label = "javascript";');
     write(root, "app/modules/legacy/schemas.d.ts", 'export declare const label: string;');
-    write(root, "app/modules/legacy/internal/value.cjs", 'exports.label = "commonjs";');
-    write(root, "app/modules/legacy/internal/value.d.cts", 'export declare const label: string;');
-    write(root, "app/modules/legacy/facade.ts", [
+    write(root, "app/infra/legacy/value.cjs", 'exports.label = "commonjs";');
+    write(root, "app/infra/legacy/value.d.cts", 'export declare const label: string;');
+    write(root, "app/infra/legacy/loading.ts", [
         'import { label } from "$modules/legacy/schemas";',
         'export const read = () => label;',
         'export const lazy = async () => (await import("$modules/legacy/schemas")).label;',
         'export const required = () => require("$modules/legacy/schemas").label;',
-        'export const commonjs = () => require("$modules/legacy/internal/value.cjs").label;',
+        'export const commonjs = () => require("$infra/legacy/value.cjs").label;',
     ].join("\n"));
     write(root, "app/http/legacy/get.ts", 'import { label } from "$modules/legacy/schemas"; export const handler = () => label;');
     checked(root);
     const stop = registerTypeScript(join(root, "app/http"));
     try {
-        const facade = require(join(root, "app/modules/legacy/facade.ts"));
+        const facade = require(join(root, "app/infra/legacy/loading.ts"));
         assert.equal(facade.read(), "javascript");
         assert.equal(await facade.lazy(), "javascript");
         assert.equal(facade.required(), "javascript");
@@ -389,7 +408,7 @@ it("loads JavaScript companions instead of their declarations in the source comp
     assert.deepEqual(buildProject(checked(root)).diagnostics, []);
     const run = spawnSync(process.execPath, ["-e", [
         'const assert = require("node:assert/strict");',
-        'const facade = require("./output/modules/legacy/facade.js");',
+        'const facade = require("./output/infra/legacy/loading.js");',
         'assert.equal(facade.read(), "javascript");',
         'assert.equal(facade.commonjs(), "commonjs");',
     ].join("\n")], { cwd: root, encoding: "utf8" });
@@ -404,9 +423,9 @@ it("rewrites nested import types in emitted and copied declarations", () => {
     const nested = 'export type Nested = import("./schemas").Box<import("$modules/orders/schemas").Box<import("$modules/orders/schemas").Order>>;';
     const facade = join(root, "app/modules/orders/facade.ts");
     writeFileSync(facade, `${readFileSync(facade, "utf8")}\n${nested}`);
-    write(root, "app/modules/orders/nested.d.ts", nested);
+    write(root, "app/modules/orders/schemas/nested.d.ts", nested.replace('"./schemas"', '"../schemas"'));
     assert.deepEqual(buildProject(checked(root)).diagnostics, []);
-    const files = ["facade.d.ts", "nested.d.ts"].map(file => join(root, "output/modules/orders", file));
+    const files = ["facade.d.ts", "schemas/nested.d.ts"].map(file => join(root, "output/modules/orders", file));
     for (const file of files) assert.ok(!readFileSync(file, "utf8").includes("$modules"));
     const declarations = ts.createProgram(files, {
         module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, esModuleInterop: true, strict: true, noEmit: true,
@@ -441,34 +460,34 @@ it("uses the emitted JSX extension for aliases with JSX preserved or transformed
         const config = JSON.parse(readFileSync(configFile, "utf8"));
         config.compilerOptions.jsx = jsx;
         writeFileSync(configFile, JSON.stringify(config));
-        write(root, "app/modules/view/schemas.tsx", 'export const label = "tsx";');
-        write(root, "app/modules/view/internal/value.jsx", 'export const label = "jsx";');
-        write(root, "app/modules/view/internal/typed.jsx", 'exports.label = "typed-jsx";');
-        write(root, "app/modules/view/internal/typed.d.ts", 'export declare const label: string;');
-        write(root, "app/modules/view/facade.ts", [
-            'export { label as tsx } from "$modules/view/schemas";',
-            'export { label as jsx } from "$modules/view/internal/value";',
-            'export { label as typed } from "$modules/view/internal/typed";',
+        write(root, "app/infra/view/schemas.tsx", 'export const label = "tsx";');
+        write(root, "app/infra/view/internal/value.jsx", 'export const label = "jsx";');
+        write(root, "app/infra/view/internal/typed.jsx", 'exports.label = "typed-jsx";');
+        write(root, "app/infra/view/internal/typed.d.ts", 'export declare const label: string;');
+        write(root, "app/infra/view/facade.ts", [
+            'export { label as tsx } from "$infra/view/schemas";',
+            'export { label as jsx } from "$infra/view/internal/value";',
+            'export { label as typed } from "$infra/view/internal/typed";',
         ].join("\n"));
         const project = checked(root);
         const stop = registerTypeScript(join(root, "app/http"));
         try {
-            const facade = require(join(root, "app/modules/view/facade.ts"));
+            const facade = require(join(root, "app/infra/view/facade.ts"));
             assert.equal(facade.tsx, "tsx");
             assert.equal(facade.jsx, "jsx");
             assert.equal(facade.typed, "typed-jsx");
         } finally { stop(); }
         assert.deepEqual(buildProject(project).diagnostics, []);
         const extension = jsx === "preserve" ? "jsx" : "js";
-        assert.ok(existsSync(join(root, `output/modules/view/schemas.${extension}`)));
-        const declarations = ts.createProgram([join(root, "output/modules/view/facade.d.ts")], {
+        assert.ok(existsSync(join(root, `output/infra/view/schemas.${extension}`)));
+        const declarations = ts.createProgram([join(root, "output/infra/view/facade.d.ts")], {
             module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, strict: true, noEmit: true,
         });
         const diagnostics = ts.getPreEmitDiagnostics(declarations);
         assert.equal(diagnostics.length, 0, ts.formatDiagnostics(diagnostics, formatHost(root)));
         const run = spawnSync(process.execPath, ["-e", [
             'const assert = require("node:assert/strict");',
-            'const facade = require("./output/modules/view/facade.js");',
+            'const facade = require("./output/infra/view/facade.js");',
             'assert.equal(facade.tsx, "tsx");',
             'assert.equal(facade.jsx, "jsx");',
             'assert.equal(facade.typed, "typed-jsx");',
@@ -503,7 +522,7 @@ it("builds portable CommonJS with working declarations and removes stale routes 
     assert.ok(!route.includes("$modules"));
     const script = [
         'const assert = require("node:assert/strict");',
-        'const facade = require("./output/modules/orders/facade.js");',
+        'const facade = require("./output/infra/loading.js");',
         'assert.equal(facade.required(), "aliased");',
         'assert.equal(facade.equals(), "aliased");',
         'assert.equal(facade.moduleRequired(), "aliased");',
@@ -528,7 +547,7 @@ it("builds portable CommonJS with working declarations and removes stale routes 
     });
     assert.equal(ts.getPreEmitDiagnostics(declarations).length, 0, ts.formatDiagnostics(ts.getPreEmitDiagnostics(declarations), formatHost(root)));
     assert.ok(!declarations.getSourceFiles().some(file => file.fileName.startsWith(join(root, "app"))));
-    assert.ok(existsSync(join(output, "modules/orders/internal/model.d.ts")));
+    assert.ok(existsSync(join(output, "modules/orders/schemas/model.d.ts")));
     const map = JSON.parse(readFileSync(join(output, "http/orders/[id]/get.js.map"), "utf8"));
     assert.ok(map.sources[0].endsWith("app/http/orders/[id]/get.ts"));
     rmSync(join(root, "app/http/orders"), { recursive: true });

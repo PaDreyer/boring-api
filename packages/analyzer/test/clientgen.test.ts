@@ -60,7 +60,7 @@ function consumer(files: Record<string, string>, run: (root: string) => void | P
 }
 
 function clean(project: ReturnType<typeof analyzeProject>) {
-    assert.deepEqual(project.architecture.map(error => error.message), []);
+    assert.deepEqual(project.architecture.map(error => `${error.file.fileName}:${error.start} ${error.code}: ${error.message}`), []);
     assert.deepEqual(project.diagnostics.map(error => ts.flattenDiagnosticMessageText(error.messageText, "\n")), []);
 }
 
@@ -226,7 +226,7 @@ it("rejects missing, redirected and invalid $client editor mappings", () => {
             assert.equal(errors.length, 1);
             assert.match(String(errors[0].messageText), /\$client.*selected API/);
             assert.equal(errors[0].file?.fileName, join(root, "web/client/api.ts"));
-            assert.deepEqual(project.architecture, []);
+            assert.deepEqual(project.architecture.map(error => error.message), []);
             assert.deepEqual(project.program.getCompilerOptions().paths!.$client, [project.clientFile]);
         }
         configuration.compilerOptions.paths.$client = [".boring/types/api/$client.d.ts"];

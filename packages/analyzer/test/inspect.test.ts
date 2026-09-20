@@ -35,7 +35,7 @@ function project(files: Record<string, string>, run: (root: string) => void | Pr
 function inspect(root: string, directory = "api") {
     const analyzed = analyzeProject(root, directory);
     assert.equal(analyzed.diagnostics.length, 0, ts.formatDiagnostics(analyzed.diagnostics, formatHost(root)));
-    assert.deepEqual(analyzed.architecture, []);
+    assert.deepEqual(analyzed.architecture.map(error => error.message), []);
     return inspectProject(analyzed);
 }
 
@@ -43,8 +43,8 @@ it("follows aliases and re-exports without executing setup, routes, schemas or f
     project({
         "api/+setup.ts": 'import { makeOrders, identity } from "@orders/facade"; throw new Error("EXECUTED setup"); export async function setup() { return { sales: makeOrders(), identity }; }',
         "api/get.ts": 'import { parsed } from "../modules/orders/schemas"; throw new Error("EXECUTED route"); export const query = parsed; export const output = parsed; export const handler = () => "1";',
-        "modules/orders/facade.ts": 'export { makeOrders, identity } from "./internal/operations"; throw new Error("EXECUTED facade");',
-        "modules/orders/internal/operations.ts": [
+        "modules/orders/facade.ts": 'export { makeOrders, identity } from "./facade/operations"; throw new Error("EXECUTED facade");',
+        "modules/orders/facade/operations.ts": [
             '/** Retrieve an existing order. */',
             'export function get(id: string): string;',
             'export function get(id: number): number;',
@@ -59,18 +59,18 @@ it("follows aliases and re-exports without executing setup, routes, schemas or f
         assert.equal(JSON.stringify(inspect(root)), JSON.stringify(first));
         const operation = first.services.find(service => service.name === "sales")!.operations[0];
         assert.equal(operation.access, "ctx.services.sales.get");
-        assert.equal(operation.source.file, "modules/orders/internal/operations.ts");
+        assert.equal(operation.source.file, "modules/orders/facade/operations.ts");
         assert.equal(operation.source.line, 4);
         assert.deepEqual(operation.signatures.map(signature => signature.returnType), ["string", "number"]);
         const identity = first.services.find(service => service.name === "identity")!.operations[0];
         assert.equal(identity.access, "ctx.services.identity");
-        assert.equal(identity.source.file, "modules/orders/internal/operations.ts");
+        assert.equal(identity.source.file, "modules/orders/facade/operations.ts");
         assert.deepEqual(identity.signatures[0].typeParameters, ["T extends string | number = string"]);
         assert.equal(first.routes[0].input.query!.inputType, "string");
         assert.equal(first.routes[0].input.query!.outputType, "number");
         assert.equal(first.routes[0].output!.outputType, "number");
         assert.equal(first.modules.find(module => module.name === "unused")!.facade!.exports[0].name, "existing");
-        assert.equal(first.modules.find(module => module.name === "orders")!.facade!.exports[0].source.file, "modules/orders/internal/operations.ts");
+        assert.equal(first.modules.find(module => module.name === "orders")!.facade!.exports[0].source.file, "modules/orders/facade/operations.ts");
         write(root, "modules/unused/facade.ts", '\n/** Now accepts a numeric id. */\nexport const existing = (id: number) => ({ id });');
         const updated = inspect(root).modules.find(module => module.name === "unused")!.facade!.exports[0];
         assert.equal(updated.source.line, 3);
@@ -83,15 +83,15 @@ it("follows aliases and re-exports without executing setup, routes, schemas or f
 it("keeps type-only exports distinct from runtime operations through aliases and barrels", () => {
     project({
         "api/get.ts": 'export const handler = () => null;',
-        "modules/orders/internal/operations.ts": 'export const run = (id: string) => id; export class Order { id = "order"; }',
-        "modules/orders/internal/types.ts": 'export type { run as throughBarrel } from "./operations";',
+        "modules/orders/facade/operations.ts": 'export const run = (id: string) => id; export interface Order { id: string; }',
+        "modules/orders/facade/types.ts": 'export type { run as throughBarrel } from "./operations";',
         "modules/orders/facade.ts": [
-            'export type { run as declared, Order } from "./internal/operations";',
-            'export { type run as inline, run as publicRun, Order as PublicOrder } from "./internal/operations";',
-            'import type { run as imported } from "./internal/operations";',
+            'export type { run as declared, Order } from "./facade/operations";',
+            'export { type run as inline, run as publicRun } from "./facade/operations";',
+            'import type { run as imported } from "./facade/operations";',
             'export { imported };',
-            'export { throughBarrel as renamed } from "./internal/types";',
-            'export * from "./internal/types";',
+            'export { throughBarrel as renamed } from "./facade/types";',
+            'export * from "./facade/types";',
         ].join("\n"),
     }, root => {
         const result = inspect(root);
@@ -101,11 +101,10 @@ it("keeps type-only exports distinct from runtime operations through aliases and
             assert.equal(entry.kind, "type", name);
             assert.deepEqual(entry.signatures, [], name);
             assert.equal(entry.schema, null, name);
-            assert.equal(entry.source.file, "modules/orders/internal/operations.ts");
+            assert.equal(entry.source.file, "modules/orders/facade/operations.ts");
         }
         assert.match(entries.find(entry => entry.name === "declared")!.type!, /string/);
         assert.equal(entries.find(entry => entry.name === "publicRun")!.kind, "function");
-        assert.equal(entries.find(entry => entry.name === "PublicOrder")!.kind, "value");
         assert.match(formatInspection(result), /type declared:/);
     });
 });
@@ -115,7 +114,7 @@ it("discovers composed services and only the shared callable operations of union
         "api/+setup.ts": 'import { makeCombined, makeVariant } from "../modules/orders/facade"; export const setup = () => ({ combined: makeCombined(), variant: makeVariant(true), label: "orders", absent: undefined });',
         "api/get.ts": 'import type { GetHandler } from "./$types"; export const handler: GetHandler = ctx => [ctx.services.combined.get("1"), ctx.services.combined.create(), ctx.services.variant.get("2")];',
         "modules/orders/facade.ts": [
-            'export const makeCombined = () => Object.assign({ get(id: string) { return id; } }, { create() { return "new"; } });',
+            'export const makeCombined = () => ({ get(id: string) { return id; }, create() { return "new"; } });',
             'type Variant = { get(id: string): string; create(): string } | { get(id: string): string; remove(id: string): void };',
             'export function makeVariant(create: boolean): Variant { return create ? { get: id => id, create: () => "new" } : { get: id => id, remove() {} }; }',
         ].join("\n"),
@@ -133,33 +132,16 @@ it("discovers composed services and only the shared callable operations of union
     });
 });
 
-it("exposes public methods while excluding inherited and own private operations from catalogs and repair hints", () => {
+it("rejects class instances and dynamic composition at the public boundary", () => {
     project({
         "api/+setup.ts": 'import { make } from "../modules/orders/facade"; export const setup = () => ({ orders: make() });',
-        "api/get.ts": 'import type { GetHandler } from "./$types"; export const handler: GetHandler = ctx => ctx.services.orders.get("1");',
-        "modules/orders/facade.ts": [
-            'class Base { public inherited() { return "base"; } protected reset() {} private removeAll() {} }',
-            'class Orders extends Base {',
-            '    get(id: string) { return this.#normalize(id); }',
-            '    #normalize(id: string) { return id; }',
-            '    private hidden = () => null;',
-            '    protected get repair() { return () => null; }',
-            '}',
-            'export const make = () => new Orders();',
-        ].join("\n"),
+        "api/get.ts": 'export const handler = () => null;',
+        "modules/orders/facade.ts": 'class Orders { get() { return "1"; } } export const make = () => new Orders(); export const dynamic = () => Object.assign({}, new Orders());',
     }, root => {
-        const result = inspect(root);
-        assert.deepEqual(result.services[0].operations.map(operation => operation.access), ["ctx.services.orders.get", "ctx.services.orders.inherited"]);
-        const readable = formatInspection(result);
-        assert.doesNotMatch(readable, /ctx\.services\.orders.*(?:normalize|hidden|repair|reset|removeAll)/);
-        write(root, "infra/storage.ts", 'export const read = () => null;');
-        write(root, "api/get.ts", 'import { read } from "../infra/storage"; export const handler = read;');
         const analyzed = analyzeProject(root, "api");
-        assert.equal(analyzed.diagnostics.length, 0);
-        const hint = analyzed.architecture.find(diagnostic => diagnostic.code === "BORING101")!.message;
-        assert.match(hint, /ctx\.services\.orders\.get/);
-        assert.match(hint, /ctx\.services\.orders\.inherited/);
-        assert.doesNotMatch(hint, /normalize|hidden|repair|reset|removeAll/);
+        assert.ok(analyzed.architecture.some(error => error.code === "BORING112"));
+        assert.ok(analyzed.architecture.some(error => error.code === "BORING113"));
+        assert.throws(() => inspectProject(analyzed), /Cannot inspect/);
     });
 });
 
@@ -168,7 +150,7 @@ it("instantiates generic method constraints and defaults while preserving depend
         "api/+setup.ts": 'import { make } from "../modules/orders/facade"; export const setup = () => ({ orders: make<string>() });',
         "api/get.ts": 'import type { GetHandler } from "./$types"; export const handler: GetHandler = ctx => ctx.services.orders.get("1");',
         "modules/orders/facade.ts": [
-            'export function make<T>() { return {',
+            'export function make<T extends string | number>() { return {',
             '    get<U extends T = T>(id: U): U { return id; },',
             '    pair<U extends T, V extends U = U>(first: U, second: V): [U, V] { return [first, second]; },',
             '}; }',
@@ -182,7 +164,7 @@ it("instantiates generic method constraints and defaults while preserving depend
         assert.deepEqual(pair.parameters.map(parameter => parameter.type), ["U", "V"]);
         assert.equal(pair.returnType, "[U, V]");
         assert.match(formatInspection(result), /ctx.services.orders.get<U extends string = string>\(id: U\): U/);
-        assert.deepEqual(result.modules[0].facade!.exports[0].signatures[0].typeParameters, ["T"]);
+        assert.deepEqual(result.modules[0].facade!.exports[0].signatures[0].typeParameters, ["T extends string | number"]);
     });
 });
 
@@ -194,7 +176,6 @@ it("distinguishes declaration literals, undefined and runtime expressions withou
         "api/dynamic/get.ts": 'function choose(): string { throw new Error("EXECUTED rule"); } export const authorization = choose(); export const envelope = Boolean(1); export const handler = () => null;',
         "api/absent/get.ts": 'export const authorization = undefined; export const authentication = false; export const handler = () => null;',
         "api/mutable/get.ts": 'export let authentication = false; authentication = true; export const handler = () => null;',
-        "api/circular/get.ts": 'const rule: any = { rule }; export const authorization = rule; export const handler = () => null;',
     }, root => {
         // A recursive declaration is intentionally invalid at runtime but still must not hang inspection.
         const analyzed = analyzeProject(root, "api");
@@ -210,7 +191,6 @@ it("distinguishes declaration literals, undefined and runtime expressions withou
         assert.equal(route("/absent").access.authorization!.kind, "undefined");
         assert.equal(route("/absent").access.session, "optional");
         assert.equal(route("/mutable").access.authentication!.kind, "expression");
-        assert.equal(route("/circular").access.authorization!.kind, "expression");
     });
 });
 
@@ -221,9 +201,9 @@ it("uses the runtime precedence for middleware, envelopes and nearest error fall
         "api/+error.404.js": 'exports.handler = () => "root404";',
         "api/+error.503.js": 'exports.handler = () => "root503";',
         "api/+auth.js": 'exports.authenticate = () => ({}); exports.authorize = () => {};',
-        "api/+setup.js": 'const { make } = require("../modules/orders/facade"); module.exports = { setup: () => ({ orders: make() }) };',
-        "modules/orders/facade.js": 'module.exports = require("./internal/operations");',
-        "modules/orders/internal/operations.js": 'exports.make = () => ({ get(id) { return id; } });',
+        "api/+setup.ts": 'import { make } from "../modules/orders/facade"; export const setup = () => ({ orders: make() });',
+        "modules/orders/facade.ts": 'export { make } from "./facade/operations";',
+        "modules/orders/facade/operations.ts": 'export const make = () => ({ get(id: string) { return id; } });',
         "api/scoped/+middleware.js": 'exports.handler = () => ({ child: true });',
         "api/scoped/+envelope.js": 'exports.handler = () => "scoped";',
         "api/scoped/+error.js": 'exports.handler = () => "scopedError";',

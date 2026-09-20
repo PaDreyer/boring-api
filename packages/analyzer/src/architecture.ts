@@ -1,11 +1,13 @@
-import { realpathSync } from "fs";
 import { builtinModules } from "module";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path";
+import { basename, dirname, join, relative, sep } from "path";
 import ts from "typescript";
 import { serviceSources } from "./services";
+import { applicationRole, allowsModuleDependency, applicationDirectories as roots, canonicalPath as canonical, withinDirectory as inside } from "@boringapi/core/conventions";
+import { checkBoundaries } from "./boundaries";
+import { typeOnlyDependency } from "./type-dependencies";
 
 export interface ArchitectureDiagnostic {
-    code: "BORING101" | "BORING102" | "BORING103" | "BORING104" | "BORING105" | "BORING106" | "BORING107" | "BORING109";
+    code: "BORING101" | "BORING102" | "BORING103" | "BORING104" | "BORING105" | "BORING106" | "BORING107" | "BORING109" | "BORING110" | "BORING111" | "BORING112" | "BORING113" | "BORING114";
     file: ts.SourceFile;
     start: number;
     length: number;
@@ -32,28 +34,6 @@ const extensions = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"
 const builtins = new Set(builtinModules.map(name => name.replace(/^node:/, "")));
 const toolingPackages = new Set(["compiler", "typegen", "analyzer", "build", "scaffold", "dev", "cli"].map(name => `@boringapi/${name}`));
 
-function canonical(file: string): string {
-    try { return realpathSync(file); }
-    catch { return resolve(file); }
-}
-
-function inside(parent: string, file: string): boolean {
-    const path = relative(parent, file);
-    return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
-}
-
-function roots(apiDirectory: string) {
-    const api = canonical(apiDirectory);
-    const parent = dirname(api);
-    return {
-        api,
-        modules: canonical(join(parent, "modules")),
-        infra: canonical(join(parent, "infra")),
-        browser: canonical(join(parent, "web", "client")),
-        pages: canonical(join(parent, "web", "server")),
-    };
-}
-
 /** Include unused application modules as well as dependencies reached from routes. */
 export function architectureFiles(apiDirectory: string): string[] {
     return [...new Set(Object.values(roots(apiDirectory)).flatMap(directory =>
@@ -63,7 +43,7 @@ export function architectureFiles(apiDirectory: string): string[] {
 }
 
 /** Analyze source and type information only; never load consumer modules. */
-export function checkArchitecture(program: ts.Program, apiDirectory: string, generatedRoot: string): ArchitectureDiagnostic[] {
+export function analyzeArchitecture(program: ts.Program, apiDirectory: string, generatedRoot: string) {
     const directories = roots(apiDirectory);
     const generated = canonical(generatedRoot);
     const entries = (specifier: string) => {
@@ -101,10 +81,9 @@ export function checkArchitecture(program: ts.Program, apiDirectory: string, gen
         if (inside(directories.browser, target)) return { kind: "browser" };
         if (inside(directories.pages, target)) return { kind: "pages" };
         if (inside(directories.modules, target)) {
-            const parts = relative(directories.modules, target).split(sep);
-            const entry = parts.length === 2 && /^(facade|schemas)\.(?:d\.)?[cm]?[jt]sx?$/.exec(parts[1]);
-            return { kind: "module", module: parts.length > 1 ? parts[0] : undefined,
-                entry: entry ? entry[1] as "facade" | "schemas" : undefined };
+            const entry = applicationRole(apiDirectory, target);
+            return { kind: "module", module: entry.module,
+                entry: entry.public && (entry.role === "facade" || entry.role === "schemas") ? entry.role : undefined };
         }
         if (frameworkEntries.has(target)) return { kind: "framework" };
         const name = packageName(dirname(target));
@@ -169,9 +148,9 @@ export function checkArchitecture(program: ts.Program, apiDirectory: string, gen
         dependencies.set(key, []);
         function visit(node: ts.Node) {
             if (ts.isImportDeclaration(node)) {
-                moduleReference(source, node.moduleSpecifier, node.importClause?.isTypeOnly === true);
+                moduleReference(source, node.moduleSpecifier, typeOnlyDependency(node));
             } else if (ts.isExportDeclaration(node) && node.moduleSpecifier) {
-                moduleReference(source, node.moduleSpecifier, node.isTypeOnly);
+                moduleReference(source, node.moduleSpecifier, typeOnlyDependency(node));
             } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
                 if (node.moduleReference.expression) moduleReference(source, node.moduleReference.expression, node.isTypeOnly);
             } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
@@ -220,21 +199,23 @@ export function checkArchitecture(program: ts.Program, apiDirectory: string, gen
     const servicesHint = operations.length ? `\nExisting public operations: ${operations.slice(0, 8).join(", ")}.` : "";
     for (const [file, edges] of dependencies) {
         const from = area(file);
-        if (from.kind === "module" && !from.module) {
+        const fromRole = applicationRole(apiDirectory, file);
+        if ((from.kind === "module" || from.kind === "api") && fromRole.role === "unknown") {
             const source = sources.get(file)!;
-            report("BORING107", source, source, "Place module code in modules/<name>/, with facade.ts and schemas.ts as its public entry points.");
+            report("BORING107", source, source, "Unclassified application source. Use facade.ts/facade/, service.ts/services/, schemas.ts/schemas/ or repository.ts/ports/ inside modules/<name>; helpers and internal directories have no implicit permissions.");
         }
         // Imported helpers outside the conventions cannot become an alternate
         // application layer. Their incoming edge is diagnosed below.
         if (from.kind === "other") continue;
         for (const edge of edges) {
             const to = edge.area;
+            const toRole = edge.target ? applicationRole(apiDirectory, edge.target) : undefined;
             const fail = (code: ArchitectureDiagnostic["code"], message: string) => report(code, edge.source, edge.node, message);
             const framework = to.kind === "framework" || (to.kind === "package" && to.name === "@boringapi/core");
             const tooling = to.kind === "package" && toolingPackages.has(to.name!);
             const zod = to.kind === "package" && to.name === "zod";
-            const endpoint = from.kind === "api" && /(?:^|[/\\])(get|post|put|patch|delete|head|options)\.[jt]s$/.test(file);
-            const setup = file === join(directories.api, "+setup.ts") || file === join(directories.api, "+setup.js");
+            const endpoint = fromRole.role === "endpoint";
+            const setup = fromRole.role === "setup";
 
             if (from.kind === "api" && to.kind === "generated" && edge.typeOnly) {
                 continue;
@@ -242,20 +223,30 @@ export function checkArchitecture(program: ts.Program, apiDirectory: string, gen
                 fail("BORING106", "Custom module loaders cannot be checked. Use explicit imports instead of node:module/createRequire.");
             } else if (to.kind === "api") {
                 fail("BORING104", "Routes and hooks are entry points, not dependencies. Move shared behavior into a module facade or schemas.");
-            } else if (to.kind === "module" && (!to.module || (!to.entry && (from.kind !== "module" || from.module !== to.module)))) {
-                const service = edge.target && /^service\.[cm]?[jt]sx?$/.test(basename(edge.target));
-                fail("BORING102", service
-                    ? `Module service.ts is private to '${to.module}': '${edge.specifier}'. Call its public facade through setup/ctx.services or import that facade from another module.`
-                    : `Module internals are private: '${edge.specifier}'. Import the module's facade.ts or schemas.ts instead.`);
-            } else if (from.kind === "browser" || (from.kind === "module" && from.entry === "schemas")) {
+            } else if (toRole?.role === "service" && fromRole.role === "facade" && fromRole.module === toRole.module &&
+                (!ts.isImportDeclaration(edge.node.parent) && !ts.isExportDeclaration(edge.node.parent) ||
+                    ts.isImportDeclaration(edge.node.parent) && !!edge.node.parent.importClause?.namedBindings &&
+                    ts.isNamespaceImport(edge.node.parent.importClause.namedBindings))) {
+                fail("BORING114", "Service references require explicit named ES imports so calls and value escapes can be checked. CommonJS and lazy service loading are unsupported.");
+            } else if (to.kind === "module" && toRole && !allowsModuleDependency(fromRole, toRole, edge.typeOnly)) {
+                const code = from.kind === "browser" || fromRole.role === "schemas" ? "BORING105" :
+                    toRole.role === "facade" && from.kind === "infra" ? "BORING104" : endpoint && toRole.role === "facade" ? "BORING101" : "BORING102";
+                fail(code, `${fromRole.role} cannot import ${toRole.role} '${edge.specifier}'. Only the owning facade calls services; adapters/setup import port types, and callers reuse public facade operations.${servicesHint}`);
+            } else if (from.kind === "browser" || fromRole.role === "schemas") {
                 const local = from.kind === "browser" && to.kind === "browser";
-                const schema = to.kind === "module" && to.entry === "schemas";
+                const schema = toRole?.role === "schemas";
                 const client = from.kind === "browser" && (to.kind === "client" ||
                     to.kind === "package" && to.name === "@boringapi/core" && edge.specifier === "@boringapi/core/client" ||
                     to.kind === "generated" && edge.typeOnly && edge.target !== undefined && basename(edge.target) === "$client.d.ts");
                 const external = to.kind === "package" && (from.kind === "browser" ? (!(framework || tooling) || edge.typeOnly) : zod);
                 if (!(local || schema || external || client || (framework && edge.typeOnly))) {
                     fail("BORING105", `Browser code and shared schemas cannot import server code: '${edge.specifier}'. Share data through schemas.ts; use import type for framework-only types.`);
+                }
+            } else if (from.kind === "module") {
+                const local = to.kind === "module" && toRole && allowsModuleDependency(fromRole, toRole, edge.typeOnly);
+                const core = framework && (fromRole.role === "facade" || edge.typeOnly);
+                if (!(local || zod && fromRole.role !== "port" || core)) {
+                    fail("BORING110", `${fromRole.role} cannot import '${edge.specifier}'. Business code uses injected port contracts; concrete infrastructure, packages and Node APIs belong in infra/.`);
                 }
             } else if (endpoint) {
                 if (!(framework || zod || (to.kind === "module" && to.entry === "schemas") || (to.kind === "generated" && edge.typeOnly))) {
@@ -269,7 +260,7 @@ export function checkArchitecture(program: ts.Program, apiDirectory: string, gen
                 fail("BORING109", "Server pages are presentation adapters. Only +setup wires them; business modules and infrastructure must not depend on pages.");
             } else if (from.kind === "api" && !setup && (to.kind === "infra" || (to.kind === "package" && !framework && !zod))) {
                 fail("BORING101", "Initialize infrastructure and SDKs in +setup.ts and expose the required behavior through a facade.");
-            } else if (from.kind === "infra" && to.kind === "module" && to.entry === "facade" && !edge.typeOnly) {
+            } else if (from.kind === "infra" && to.kind === "module" && to.entry === "facade") {
                 fail("BORING104", "Infrastructure must not call business facades. Inject the adapter from +setup.ts; import type may describe its contract.");
             } else if (to.kind === "browser" || to.kind === "other" || to.kind === "generated") {
                 fail("BORING107", `Dependency '${edge.specifier}' crosses the application structure. Use modules/<name>/facade.ts, schemas.ts or infra/ for shared server code.`);
@@ -314,7 +305,16 @@ export function checkArchitecture(program: ts.Program, apiDirectory: string, gen
     }
     for (const module of [...moduleGraph.keys()].sort()) visitModule(module);
 
-    return diagnostics.sort((a, b) => a.file.fileName.localeCompare(b.file.fileName) || a.start - b.start || a.code.localeCompare(b.code));
+    diagnostics.push(...checkBoundaries(program, apiDirectory, [...dependencies.keys()].flatMap(file => sources.get(file) ? [sources.get(file)!] : [])));
+    return {
+        diagnostics: diagnostics.sort((a, b) => a.file.fileName.localeCompare(b.file.fileName) || a.start - b.start || a.code.localeCompare(b.code)),
+        sources: [...dependencies].filter(([file]) => area(file).kind !== "other").map(([file, edges]) => ({
+            file, ...applicationRole(apiDirectory, file),
+            dependencies: edges.map(edge => ({ specifier: edge.specifier, file: edge.target, typeOnly: edge.typeOnly,
+                role: edge.target ? applicationRole(apiDirectory, edge.target).role : edge.area.kind,
+                start: edge.node.getStart(edge.source) })),
+        })).sort((a, b) => a.file.localeCompare(b.file)),
+    };
 }
 
 export function formatArchitectureDiagnostics(diagnostics: ArchitectureDiagnostic[], projectRoot: string): string {
@@ -322,4 +322,8 @@ export function formatArchitectureDiagnostics(diagnostics: ArchitectureDiagnosti
         const { line, character } = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
         return `${relative(projectRoot, diagnostic.file.fileName)}:${line + 1}:${character + 1} - error ${diagnostic.code}: ${diagnostic.message}`;
     }).join("\n");
+}
+
+export function checkArchitecture(program: ts.Program, apiDirectory: string, generatedRoot: string): ArchitectureDiagnostic[] {
+    return analyzeArchitecture(program, apiDirectory, generatedRoot).diagnostics;
 }

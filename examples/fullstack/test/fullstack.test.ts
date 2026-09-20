@@ -33,6 +33,7 @@ it("runs order rules and audit writes through the transaction repository", async
         async transaction(operation) {
             transactions++;
             return operation({
+                newId: randomUUID,
                 async insert(value) { records.set(value.id, value); writes.push("order"); },
                 async recordCreation(_value, actorId) { writes.push(`audit:${actorId}`); },
                 async find(id) { return records.get(id); },

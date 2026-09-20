@@ -75,10 +75,14 @@ export function setup(_ctx: SetupContext) {
 export const health = z.object({ status: z.literal("ok") });
 export type Health = z.infer<typeof health>;
 `,
-        [`${modules}/health/facade.ts`]: `import type { Health } from "./schemas";
+        [`${modules}/health/service.ts`]: `import type { Health } from "./schemas";
+
+export function getHealth(): Health { return { status: "ok" }; }
+`,
+        [`${modules}/health/facade.ts`]: `import { getHealth } from "./service";
 
 export function createHealth() {
-    return { get(): Health { return { status: "ok" }; } };
+    return { get() { return getHealth(); } };
 }
 `,
         [`${api}/health/get.ts`]: `import { health } from "$modules/health/schemas";
@@ -133,7 +137,7 @@ Keep project-specific instructions here; do not copy the package guide into this
 
 - API and hooks: \`${api}/\`. Setup: \`${api}/+setup.ts\`.
 - Business modules: \`${modules}/<name>/facade.ts\` and \`schemas.ts\` are public;
-  private \`service.ts\` holds business rules. Add a private \`repository.ts\` port
+  private \`service.ts\` holds business rules. Add a type-only \`repository.ts\` port
   when storage is needed. Import public entries through \`$modules\`.
 - Infrastructure: \`${infra}/\`, imported through \`$infra/<path>\` where allowed.
   Setup constructs adapters and injects them into facades returned as services.

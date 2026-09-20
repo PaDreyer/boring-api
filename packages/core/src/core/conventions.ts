@@ -1,5 +1,7 @@
 import { Dirent, readdirSync, statSync } from "fs";
 import { extname, join, resolve } from "path";
+export { APPLICATION_ROLES, applicationRole, applicationDirectories, allowsModuleDependency, canonicalPath, withinDirectory } from "./roles";
+export type { ApplicationRole, RoleSource } from "./roles";
 
 export const HTTP_METHODS = new Set(["get", "post", "put", "patch", "delete", "head", "options"]);
 

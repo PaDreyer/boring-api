@@ -38,7 +38,7 @@ function fixture(api = "api") {
 function checked(root: string, api = "api", projectFile?: string) {
     const result = analyzeProject(root, api, projectFile);
     assert.equal(result.diagnostics.length, 0, ts.formatDiagnostics(result.diagnostics, formatHost(root)));
-    assert.deepEqual(result.architecture, []);
+    assert.deepEqual(result.architecture.map(error => error.message), []);
     return result;
 }
 function orders(root: string) {
@@ -74,6 +74,7 @@ it("initializes default and nested consumers with typed hooks, editor shortcuts 
         const project = checked(root, api);
         const catalog = inspectProject(project);
         assert.equal(catalog.services[0].operations[0].access, "ctx.services.health.get");
+        assert.ok(catalog.roles.some(source => source.role === "service" && source.module === "health"));
         assert.equal(catalog.routes[0].path, "/health");
         assert.equal(catalog.setup!.file, `${api}/+setup.ts`);
         assert.match(readFileSync(join(root, api, "+setup.ts"), "utf8"), /SetupContext.*from "\.\/\$types"/);
@@ -97,6 +98,21 @@ it("initializes default and nested consumers with typed hooks, editor shortcuts 
         assert.equal(located.stdout.trim(), join(library, "docs/agent-guide.md"));
         assert.ok(instructions.includes(`\`${api}/+setup.ts\``));
         assert.ok(instructions.includes(`\`${api === "api" ? "web/client" : "src/web/client"}/\``));
+    }
+});
+
+it("refuses generators when setup exposes raw infrastructure directly or through setter aliases", () => {
+    const root = fixture();
+    write(root, "infra/store.ts", 'export const store = { read() { return "raw"; } };');
+    for (const setup of [
+        'export const setup = () => ({ store });',
+        'export function setup(ctx: SetupContext) { const { assign } = ctx; assign.call(ctx, { raw: store }); }',
+    ]) {
+        write(root, "api/+setup.ts", `import type { SetupContext } from "@boringapi/core"; import { store } from "$infra/store"; ${setup}`);
+        assert.throws(() => addModule(root, "api", "invoices"), /BORING113/);
+        assert.throws(() => addEndpoint(root, "api", "invoices/get"), /BORING113/);
+        assert.equal(existsSync(join(root, "modules/invoices")), false);
+        assert.equal(existsSync(join(root, "api/invoices")), false);
     }
 });
 

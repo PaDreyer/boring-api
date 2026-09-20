@@ -29,7 +29,7 @@ function dependencies(root: string) {
 function checked(root: string, api = "api", projectFile?: string) {
     const result = analyzeProject(root, api, projectFile);
     assert.equal(result.diagnostics.length, 0, ts.formatDiagnostics(result.diagnostics, formatHost(root)));
-    assert.deepEqual(result.architecture, []);
+    assert.deepEqual(result.architecture.map(error => error.message), []);
     return result;
 }
 function cli(root: string, args: string[]) {

@@ -10,10 +10,10 @@ does not make an enforcement requirement complete.
 | Area | Current implementation | Remaining gap |
 | --- | --- | --- |
 | HTTP | Filesystem routes, hooks, validation, typed request context, authentication and permissions. | Business execution and context are still centered on HTTP. |
-| Module boundaries | Public facade/schema entries, private files and mandatory cross-boundary import checks. | Private module files still have broad same-module access; services do not have an exclusive facade caller rule. |
-| Service and repository separation | Orders examples have a facade, service and repository port; module scaffolding includes a service file. | Their internal responsibilities and invocation paths are not fully enforced. Existing facade re-exports and direct module-to-infrastructure imports remain possible. |
-| Dependency composition | Root setup creates dependencies and exposes inferred `ctx.services`. | The checker does not establish that exposed objects are approved facade operations; raw adapters or services can be passed through setup. |
-| Discovery and tooling | Static checks, inspection of routes/public modules/setup services, generators, source watching and portable builds. | The model has no first-class roles or catalogs for jobs, schedules, event consumers and application commands. |
+| Module boundaries | Shared roles and a mandatory dependency matrix, including split role files, unused source and same-module service caller restrictions. | Static structure cannot infer business meaning or replace permission tests. |
+| Service and repository separation | Business modules use injected ports; concrete infrastructure imports and service forwarding fail checks. Schemas export data/Zod contracts; ports contain types only. | No semantic proof that a use case implements the correct domain rules. |
+| Dependency composition | Explicit facade/page factories and data-only operation contracts; setup exposure and imperative writes are checked. | Common configuration, resource disposal and execution lifetime belong to milestone 2. |
+| Discovery and tooling | Inspection v2 adds role files and dependency edges. Inspection, generators and portable builds gate on the same checks; the generated health example uses a service. | Jobs, schedules, event consumers and application commands are not yet supported entry points. |
 | Database and web | PostgreSQL transaction/migration example, typed browser client and server-page boundaries. | Database lifecycle is application-owned; the framework has no common worker lifecycle, durable job contract or reliable event publication contract. |
 
 Evidence lives in `packages/analyzer/src/architecture.ts`,
@@ -34,25 +34,25 @@ the authority for what the installed checker actually accepts today.
 
 ## Milestone 1 — Enforce one application architecture
 
-**Status: next; incomplete.** This is the next implementation milestone. Resolve
-the model as a whole before adding isolated exceptions or a second execution runtime.
+**Status: complete, including audit corrections.** The concrete
+structural contract and migration are in [Application roles](architecture.md).
 
-- [ ] Define one role catalog and an explicit matrix of imports, exports,
+- [x] Define one role catalog and an explicit matrix of imports, exports,
   composition and calls. Cover entry points, facades, services, schemas, ports,
   adapters and bootstrap, including the convention for splitting each role.
-- [ ] Replace the generic permission granted to "private module code" with
+- [x] Replace the generic permission granted to "private module code" with
   role-specific rules. Only the owning facade may invoke its services; a service
   cannot orchestrate peer services or import another module's implementation.
-- [ ] Enforce injected ports for infrastructure access. Keep concrete database
+- [x] Enforce injected ports for infrastructure access. Keep concrete database
   entities, clients and SDK adapters out of business modules and entry points.
-- [ ] Define and check public facade contracts and setup exposure. Prevent
+- [x] Define and check public facade contracts and setup exposure. Prevent
   re-exports, wrappers or injected raw objects from bypassing a service boundary.
-- [ ] Classify application source consistently, including unused files. Keep
+- [x] Classify application source consistently, including unused files. Keep
   aliases, barrels, type-only edges, CommonJS and dynamic loading under the same
   rules; report unsupported forms explicitly.
-- [ ] Use the role model in inspection, generators and builds. Diagnostics must
+- [x] Use the role model in inspection, generators and builds. Diagnostics must
   identify the violated role and show the existing operation to reuse when known.
-- [ ] Align all examples, including small generated modules, with the complete
+- [x] Align all examples, including small generated modules, with the complete
   pattern and document the migration from today's more permissive boundaries.
 
 **Acceptance:** an entry point, foreign module and same-module helper all fail
@@ -60,6 +60,39 @@ when they bypass a facade to reach a service or concrete adapter. Negative tests
 cover indirect access as well as direct imports. Valid facade/service/port/adapter
 composition is discoverable, generated and compiled through the same model.
 No rule is complete solely because a specific filename receives a special error.
+
+Implementation evidence: `packages/core/src/core/roles.ts` owns locations and the
+module dependency matrix. `packages/analyzer/src/architecture.ts` resolves the
+complete dependency graph; `boundaries.ts` checks public exports, service references,
+port/schema shapes, setup provenance, mutation and capability erasure. Inspector v2
+uses that model; generators and builds reject its diagnostics before writing output.
+
+Negative cases in `packages/analyzer/test/architecture.test.ts` cover same-module
+helpers and peer services, alias/type/re-export/CommonJS paths, raw setup values,
+imperative setup writes, returned capabilities and unsupported composition.
+`inspect.test.ts`, build alias tests and scaffold tests cover valid split facades,
+transaction ports, role discovery, refusal of invalid projects, and generated builds.
+Both examples preserve business authorization; the fullstack tests exercise facade
+transaction ownership and server-page reuse. Real PostgreSQL remains an opt-in test.
+
+Validation: `pnpm build`, `pnpm example:check`, `pnpm typecheck`, `pnpm test`,
+`pnpm example:build` and `pnpm example:fullstack:build` pass. The full suite reports
+141 passing tests and one PostgreSQL test skipped without `BORING_TEST_DATABASE_URL`.
+The 24 architecture tests include service return-type erasure, callable port
+injection and bounded traversal of shared recursive data/dependency graphs.
+Audit regressions in `packages/analyzer/test/boundary-regressions.test.ts` additionally
+cover destructured and narrowed setup setters, erasure through call parameters,
+nested fields, rest tuples, callback arguments/results, Promise results and schemas,
+callable service containers, data-only error classes, inline type imports/exports
+and retained runtime edges. Build and scaffold regressions verify refusal before
+writing output; positive cases preserve typed port composition and Zod schemas.
+
+This is a breaking convention/tooling change requiring a **minor** release on the
+0.x line. It does not add a JavaScript sandbox: arbitrary reflection/global side
+channels, installed-package behavior, semantic duplication and business correctness
+are outside the structural guarantee. Startup remains compiler-free; source checks
+must run before deployment. CommonJS dependency edges remain analyzed, while public
+operation/setup exports and service references use the documented explicit forms.
 
 ## Milestone 2 — Give every execution a common lifecycle
 

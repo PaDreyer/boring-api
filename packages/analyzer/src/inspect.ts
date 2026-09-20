@@ -1,6 +1,6 @@
-import { dirname, isAbsolute, join, relative, sep } from "path";
+import { isAbsolute, relative, sep } from "path";
 import ts from "typescript";
-import { findErrorTemplate, SourceScope } from "@boringapi/core/conventions";
+import { applicationRole, findErrorTemplate, SourceScope } from "@boringapi/core/conventions";
 import { AnalyzedProject } from "./project";
 import { serviceSources } from "./services";
 import { declarationOf, exported, isTypeOnlyExport, moduleExports, originalSymbol, symbolType } from "@boringapi/compiler";
@@ -77,6 +77,7 @@ function literal(checker: ts.TypeChecker, expression: ts.Expression, seen = new 
 
 /** Build the versioned catalog from the same validated project used by check. */
 export function inspectProject(project: AnalyzedProject) {
+    if (project.diagnostics.length || project.architecture.length) throw new Error("Cannot inspect a project with check errors.");
     const checker = project.program.getTypeChecker();
     const printer = ts.createPrinter({ removeComments: true });
     const path = (file: string) => relative(project.projectRoot, file).split(sep).join("/") || ".";
@@ -202,18 +203,16 @@ export function inspectProject(project: AnalyzedProject) {
                 type: contract ? null : formatType(type, node, typeOnly), schema: contract, signatures: calls };
         }) };
     }
-    const moduleRoot = join(dirname(project.apiDirectory), "modules");
     const modules = new Map<string, { name: string; facade: ReturnType<typeof publicFile> | null; schemas: ReturnType<typeof publicFile> | null }>();
     for (const source of project.program.getSourceFiles()) {
-        const parts = relative(moduleRoot, source.fileName).split(sep);
-        const entry = parts.length === 2 && /^(facade|schemas)\.(?:d\.)?[cm]?[jt]sx?$/.exec(parts[1]);
-        if (!entry || parts[0] === "..") continue;
-        const module = modules.get(parts[0]) ?? { name: parts[0], facade: null, schemas: null };
-        module[entry[1] as "facade" | "schemas"] = publicFile(source);
-        modules.set(parts[0], module);
+        const entry = applicationRole(project.apiDirectory, source.fileName);
+        if (!entry.public || !entry.module || entry.role !== "facade" && entry.role !== "schemas") continue;
+        const module = modules.get(entry.module) ?? { name: entry.module, facade: null, schemas: null };
+        module[entry.role] = publicFile(source);
+        modules.set(entry.module, module);
     }
     return {
-        schemaVersion: 1 as const, apiDirectory: path(project.apiDirectory),
+        schemaVersion: 2 as const, apiDirectory: path(project.apiDirectory),
         setup: hook(project.sources.setup, "setup"),
         auth: project.sources.auth ? { source: location(sourceFile(project.sources.auth)),
             authenticate: exported(checker, sourceFile(project.sources.auth), "authenticate") ? hook(project.sources.auth, "authenticate") : null,
@@ -223,6 +222,8 @@ export function inspectProject(project: AnalyzedProject) {
         services: serviceSources(project.program, project.apiDirectory).map(service => ({ name: service.name, access: service.access,
             operations: service.operations.map(entry => ({ name: entry.name, access: entry.access,
                 ...operation(entry.symbol, entry.declaration ?? sourceFile(project.sources.setup!)) })) })),
+        roles: project.roles.map(source => ({ ...source, file: path(source.file),
+            dependencies: source.dependencies.map(edge => ({ ...edge, file: edge.file ? path(edge.file) : undefined })) })),
         modules: [...modules.values()].sort((a, b) => a.name.localeCompare(b.name)),
     };
 }
@@ -272,5 +273,7 @@ export function formatInspection(inspection: Inspection): string {
             }
         }
     }
+    lines.push("", "Application roles");
+    for (const source of inspection.roles) lines.push(`  ${source.role}${source.module ? ` (${source.module})` : ""}: ${source.file}`);
     return lines.join("\n");
 }

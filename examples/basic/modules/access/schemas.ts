@@ -13,3 +13,12 @@ export type AuthorizationRule = PermissionRule<Permission>;
 export interface Actor {
     readonly permissions: readonly Permission[];
 }
+
+/** Roles bundle permissions; no role receives implicit or wildcard access. */
+export const rolePermissions = {
+    viewer: ["orders:read"],
+    creator: ["orders:create"],
+    admin: ["orders:read", "orders:create"],
+} as const satisfies Record<string, readonly Permission[]>;
+
+export type Role = keyof typeof rolePermissions;

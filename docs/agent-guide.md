@@ -7,8 +7,8 @@ detailed contracts. This is consumer guidance, not framework contributor guidanc
 
 The [project vision](vision.md) explains the common architecture: entry points
 delegate to facades, facades coordinate services, and business code uses injected
-ports implemented by infrastructure. Preserve those responsibilities even where
-the installed checker is still more permissive. The [roadmap](roadmap.md) identifies
+ports implemented by infrastructure. Follow the enforced [role contract](architecture.md), including its splitting
+conventions and public operation shapes. The [roadmap](roadmap.md) identifies
 the remaining enforcement and backend-runtime work; planned jobs, schedules, events
 and commands are not yet shipped framework conventions. Use the current references
 for available APIs and do not invent parallel entry-point or service registries.
@@ -63,21 +63,26 @@ before invoking their CLI. See [inspection](inspection.md) and [CLI configuratio
 | New behavior in an existing domain | Implement rules in its private `service.ts`, expose the operation through `facade.ts`, and reuse its schemas and injected dependencies. |
 | A genuinely separate domain | Generate a module, implement its public operations, then wire its factory in root `+setup.ts`. |
 | Shared data contract | `modules/<name>/schemas.ts`; derive TypeScript types from Zod. Keep it browser-safe. |
-| Storage contract | Private `modules/<name>/repository.ts`; describe only the operations the service needs. |
-| Growing implementation | Preserve facade, service and port responsibilities when splitting code. A private helper must not become an alternative caller of services or infrastructure. Other modules use public facade operations and schemas. |
+| Storage contract | Type-only `modules/<name>/repository.ts` or `ports/<name>.ts`; adapters and setup may import these contracts directly. |
+| Growing implementation | Use `facade/`, `services/`, `schemas/` and `ports/` parts. Generic helper/internal files are rejected. Services cannot call peer services. Other modules use public facade operations and schemas. |
 | Database, configuration or external SDK | Sibling `infra/`; implement repository ports, construct adapters in setup and inject them into facades. |
 | Authentication or route access | Root `+auth.ts`; reuse the application's identity provider and permission catalog. |
 | Shared request behavior | Named `+middleware`, `+envelope` or `+error` hooks at the appropriate URL scope. |
 | SPA | Sibling `web/client/`; reuse shared schemas and the application's typed API client. |
 | Server-rendered page / MPA | Sibling `web/server/`; receive existing facades through setup, validate input and escape HTML. |
 
-Facades are plain factory functions. They coordinate access, transactions and
+Facades expose plain functions or factories. They coordinate access, transactions and
 private services; services own business behavior, and repository ports describe
 storage needs. Add a repository port only for a module that persists data. No
 base class, decorator or separate registry is needed. Keep module dependencies
-acyclic. Invoke a module's services through its owning facade. Today's checker
-rejects imports from outside the module, including aliases and type-only references;
-the stricter within-module caller rule remains a tracked roadmap requirement.
+acyclic. Invoke a module's services through its owning facade. The checker enforces callers inside the module as well as outside it,
+including aliases, service value escapes and type-only references. Factories expose
+explicit objects of facade-owned operations with data inputs/outputs. Setup exposes
+traced public operations and data; inject adapters through typed ports.
+Export service operations as named functions, not callable containers. Do not hide
+capabilities behind broad data annotations or pass them to data parameters. Call
+`ctx.set`/`ctx.assign` directly; setter destructuring and aliases are rejected.
+Port imports may use `import type { Port }` or `import { type Port }`.
 [Exact import rules and diagnostics](application.md#checked-import-boundaries).
 
 ## Implement a feature
@@ -108,7 +113,7 @@ preserve existing files and reject incompatible inherited hooks. [Generator deta
 
 ## A complete small feature
 
-`boring init` generates this public health operation. These four files show the
+`boring init` generates this public health operation. These five files show the
 whole path from a shared schema to HTTP without a storage or authentication stub.
 Use this shape for small modules; protected business operations additionally need
 the permission checks described below.
@@ -122,11 +127,18 @@ export type Health = z.infer<typeof health>;
 ```
 
 ```ts
-// modules/health/facade.ts
+// modules/health/service.ts
 import type { Health } from "./schemas";
 
+export function getHealth(): Health { return { status: "ok" }; }
+```
+
+```ts
+// modules/health/facade.ts
+import { getHealth } from "./service";
+
 export function createHealth() {
-    return { get(): Health { return { status: "ok" }; } };
+    return { get() { return getHealth(); } };
 }
 ```
 
@@ -175,10 +187,10 @@ project. `GET /health` returns HTTP 200 with `{"status":"ok"}`.
   Empty handlers return 204; the nearest envelope wraps successful payloads unless
   `envelope = false`. [Request lifecycle and hook contexts](reference.md).
 - **Checks:** `boring check` is mandatory; fix `BORING` diagnostics at their source.
-  Dev/start are not substitutes for static checks. The import checker does not
-  detect duplicated business logic or prevent passing raw storage via services.
-  These are recorded enforcement gaps; follow the facade/service/port ownership
-  rules even where the checker does not yet enforce the complete model.
+  Dev/start are not substitutes for static checks. Raw storage through setup,
+  service re-exports and same-module boundary bypasses are rejected. The checker
+  does not infer business meaning, prove permission policy or sandbox JavaScript.
+  Keep permission, transaction and lifetime behavior covered by application tests.
 
 ## Reuse storage and web integrations
 

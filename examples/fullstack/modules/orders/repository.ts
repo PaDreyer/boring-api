@@ -2,6 +2,7 @@ import type { Order } from "./schemas";
 
 /** SQL adapters implement this port without exposing pg to business code. */
 export interface OrderRepository {
+    newId(): string;
     insert(order: Order): Promise<void>;
     recordCreation(order: Order, actorId: string): Promise<void>;
     find(id: string): Promise<Order | undefined>;

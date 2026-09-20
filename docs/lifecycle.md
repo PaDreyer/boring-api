@@ -4,8 +4,8 @@
 
 An application owns its dependencies. An execution owns its identity and lifetime.
 HTTP, server pages and controlled non-HTTP invocations call the same injected
-facades. Durable jobs, schedules, event delivery and command runtimes are separate
-roadmap milestones; `execute` supplies their common foundation, not those runtimes.
+facades. [Durable jobs](jobs.md) use this lifecycle, including queue claims and confirmations.
+Schedules, general event delivery and command runtimes remain later milestones.
 
 ## Configuration and construction
 
@@ -197,7 +197,7 @@ runtimes must add idempotency/reconciliation where required.
 ## Static enforcement and migration
 
 The common scanner owns root `+config`; the role model owns `executions/`. Checks,
-inspection v3, typegen, generated consumers, watching and portable builds all use
+inspection v4, typegen, generated consumers, watching and portable builds all use
 these conventions. Execution entries import public schemas, generated types, Core
 and Zod, and call injected operations. They cannot import private services, facades
 or concrete adapters. Source includes unused execution files. Configuration/identity
@@ -227,7 +227,7 @@ This is a **breaking platform minor release on 0.x**, not a patch:
 - Authentication returns explicit user/machine identities. Pass `ctx.execution` to
   operations needing identity/lifetime; non-HTTP callers use `application.execute`.
 - Replace business `HttpError` and status-based permission assertions with domain
-  error codes. Regenerate types and update inspection readers for schema version 3.
+  error codes. Regenerate types and update inspection readers for schema version 4.
 - Move the removed `modules/<name>/repository.ts` convention into type-only
   `ports/<name>.ts`. Business rules stay in `service.ts`/`services/`, and concrete
   storage stays in `infra/`. There is no extra repository implementation layer.

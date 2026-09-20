@@ -253,12 +253,13 @@ database integration. For persistent storage and web interfaces, see the
 `boring check` enforces these rules for every application. There is no disabling
 flag or compatibility mode. In addition to the consumer's `tsconfig.json` files,
 the command includes all TypeScript/JavaScript source in the selected API
-directory and its sibling `modules`, `infra`, `executions`, `web/client` and `web/server` directories. Unused
+directory and its sibling `modules`, `infra`, `jobs`, `executions`, `web/client` and `web/server` directories. Unused
 modules are checked too. It does not execute setup, hooks, routes or dependencies.
 
 | Source | Allowed dependencies |
 | --- | --- |
 | Method files such as `get.ts` | Public `schemas` modules, type-only generated `$types`, `@boringapi/core` and `zod`. Call business operations through `ctx.services`. Other packages and Node builtins belong behind a facade. |
+| Jobs in `jobs/<name>/job.ts` | Public schemas, generated JobHandler, Core and Zod; calls injected facades. [Durable delivery](jobs.md). |
 | Controlled entries in `executions/` | Public schemas, type-only generated types, Core and Zod. Receive an application owner and call injected facades inside `application.execute`. |
 | Root `+config` | Public schemas, Zod and Core types. Export a data-producing schema and configuration loader. |
 | Hooks other than `+setup` and `+config` | Public facades/schemas, Boring API, Zod and Node helpers. Initialize SDKs and infrastructure in `+setup` and expose them through facades. |
@@ -310,6 +311,7 @@ Diagnostics have stable codes and source locations:
 | `BORING111` | Port contains runtime implementation. |
 | `BORING112` | Public export, operation or dependency contract exposes an implementation/capability or has an unchecked type. |
 | `BORING113` | Invalid setup exposure or dynamic/mutable capability composition. |
+| `BORING116` | Invalid job declaration, policy, handler or execution-admission bypass. |
 | `BORING115` | Invalid configuration/lifecycle boundary, fabricated or stored execution context, or HTTP errors in business operations. |
 | `BORING114` | Service value escapes its owning facade call, peer invocation, or unsupported service loading. |
 

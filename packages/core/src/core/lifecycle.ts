@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { createServer, Server } from "http";
 import { Execution, ExecutionContext, ExecutionError, ExecutionIdentity, ExecutionOptions, duration } from "./execution";
 import { SetupContext, setupLifecycle } from "./setupContext";
+import type { JobAttemptResult, WorkerOptions } from "./jobs";
 
 export interface ApplicationOptions {
     /** A snapshot is passed to +config.load; defaults to this process's environment. */
@@ -30,6 +31,9 @@ export class ApplicationRuntime<Services extends object = Record<string, unknown
     private readonly active = new Set<Execution>();
     private readonly idle = new Set<() => void>();
     private readonly servers = new Set<Server>();
+    private readonly background = new Set<Promise<unknown>>();
+    private wakeWorker?: () => void;
+    private working = false;
     private shutdown?: Promise<void>;
     private completion?: Promise<void>;
     private readonly executionTimeout: number;
@@ -68,6 +72,29 @@ export class ApplicationRuntime<Services extends object = Record<string, unknown
             return result;
         } finally { this.finish(execution); }
     }
+    /** One delivery, including claim, heartbeat and acknowledgement, owned until actual settlement. */
+    runJob(options: WorkerOptions = {}): Promise<JobAttemptResult | undefined> {
+        if (!this.ready) return Promise.reject(new ExecutionError("unavailable", "Application is not accepting jobs"));
+        const pending = setupLifecycle(this.setup).jobs.attempt(this, options);
+        this.background.add(pending);
+        void pending.finally(() => this.background.delete(pending)).catch(() => {});
+        return pending;
+    }
+    /** Sequential worker; scale with independent processes. No HTTP listener or global signals. */
+    async work(options: WorkerOptions = {}): Promise<void> {
+        if (!this.ready || this.working) throw new ExecutionError("unavailable", "Worker is already running or application is closing");
+        const poll = duration(options.pollIntervalMs ?? 1000, "Worker poll interval");
+        this.working = true;
+        try {
+            while (this.ready) {
+                const result = await this.runJob(options);
+                if (!result && this.ready) await new Promise<void>(resolve => {
+                    const timer = setTimeout(() => { this.wakeWorker = undefined; resolve(); }, poll);
+                    this.wakeWorker = () => { clearTimeout(timer); this.wakeWorker = undefined; resolve(); };
+                });
+            }
+        } finally { this.working = false; }
+    }
     /** Own an HTTP listener, including listeners around a custom Express parent. */
     async listen(port = 4040, handler: Express = this.http): Promise<Server> {
         if (!this.ready) throw new ExecutionError("unavailable", "Application is not accepting listeners");
@@ -99,6 +126,7 @@ export class ApplicationRuntime<Services extends object = Record<string, unknown
     close(): Promise<void> {
         if (this.shutdown) return this.shutdown;
         this.status = "draining";
+        this.wakeWorker?.();
         const stopped = Promise.allSettled([...this.servers].map(server => new Promise<void>((resolve, reject) => {
             server.close(error => error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING" ? reject(error) : resolve());
             server.closeIdleConnections?.();
@@ -110,6 +138,8 @@ export class ApplicationRuntime<Services extends object = Record<string, unknown
         this.completion = (async () => {
             const errors: unknown[] = [];
             await drained;
+            // Queue I/O/acknowledgement and in-flight claims own their resources too.
+            await Promise.allSettled([...this.background]);
             clearTimeout(abort);
             this.idle.clear();
             // No application code is using resources now. Close leftover HTTP sockets.
@@ -129,4 +159,4 @@ export class ApplicationRuntime<Services extends object = Record<string, unknown
 }
 
 /** Public owner handle. Internal admission and completion are framework-only. */
-export type Application<Services extends object = Record<string, unknown>> = Pick<ApplicationRuntime<Services>, "http" | "execute" | "listen" | "close" | "closed" | "state" | "ready">;
+export type Application<Services extends object = Record<string, unknown>> = Pick<ApplicationRuntime<Services>, "http" | "execute" | "runJob" | "work" | "listen" | "close" | "closed" | "state" | "ready">;

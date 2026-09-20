@@ -46,6 +46,8 @@ it("runs order rules and audit writes through the transaction port", async () =>
             transactions++;
             return operation({
                 newId: randomUUID,
+                async reserve() { return undefined; },
+                async remember() {},
                 async insert(value) { records.set(value.id, value); writes.push("order"); },
                 async recordCreation(_value, actorId) { writes.push(`audit:${actorId}`); },
                 async find(id) { return records.get(id); },
@@ -85,7 +87,7 @@ it("persists API and page results in PostgreSQL, rolls back failed business writ
     let owned: Awaited<ReturnType<BoringApi["createApp"]>> | undefined;
     try {
         await Promise.all([database.migrate(), database.migrate()]);
-        assert.equal((await inspect.query("SELECT count(*)::int AS count FROM boring_migrations")).rows[0].count, 1);
+        assert.equal((await inspect.query("SELECT count(*)::int AS count FROM boring_migrations")).rows[0].count, 3);
         const created = await execute(actor, ctx => orders.create(ctx, { item: "<script>alert(1)</script>", quantity: 2 }));
         const restarted = createDatabase({ connectionString: url });
         try { assert.deepEqual(await execute(actor, ctx => createOrders(restarted.orders).get(ctx, created.id)), created); }
@@ -120,10 +122,10 @@ it("persists API and page results in PostgreSQL, rolls back failed business writ
         await assert.rejects(client.request("POST /orders", { body: { item: "", quantity: 0 } }), error => error instanceof ApiError && error.status === 400);
         await assert.rejects(client.request("GET /orders/:id", { params: { id: randomUUID() } }), error => error instanceof ApiError && error.status === 404);
 
-        const saved = (await inspect.query("SELECT checksum FROM boring_migrations")).rows[0].checksum;
-        await inspect.query("UPDATE boring_migrations SET checksum = 'changed'");
+        const saved = (await inspect.query("SELECT checksum FROM boring_migrations WHERE name = '001_orders'")).rows[0].checksum;
+        await inspect.query("UPDATE boring_migrations SET checksum = 'changed' WHERE name = '001_orders'");
         await assert.rejects(database.migrate(), /Applied migration changed/);
-        await inspect.query("UPDATE boring_migrations SET checksum = $1", [saved]);
+        await inspect.query("UPDATE boring_migrations SET checksum = $1 WHERE name = '001_orders'", [saved]);
         await database.migrate();
     } finally {
         if (beforeUrl === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = beforeUrl;

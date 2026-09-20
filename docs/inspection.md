@@ -34,17 +34,18 @@ Invalid structure, contracts, types or architecture produce diagnostics on stder
 and exit status 1, with no catalog on stdout. Fix these errors and run inspection
 again. Successful `--json` output is exactly one JSON object on stdout.
 
-### JSON contract, version 3
+### JSON contract, version 4
 
 The root object contains these fields:
 
 | Field | Contents |
 | --- | --- |
-| `schemaVersion` | `3`. Breaking changes to the catalog structure increment this value; readers should ignore additional fields. |
+| `schemaVersion` | `4`. Breaking changes to the catalog structure increment this value; readers should ignore additional fields. |
 | `apiDirectory` | Selected API path relative to the consumer project root. |
 | `setup`, `auth` | Setup and authentication/authorization hook locations, or `null` when absent. |
 | `configuration` | Root config source, loader location and schema types, or `null` when absent. |
 | `lifecycle` | Application ownership, the `setup.onClose` cleanup contract and checked files in `executions/`. |
+| `jobs` | Named declarations with payload types, literal version/policy, handler/source locations and resolved public facade calls. |
 | `routes` | Method, URL path, handler location/return types, `input`, `output`, `access`, and effective `hooks`. |
 | `services` | Callable services inferred from the return type of `+setup`, with exact `ctx.services` access expressions and operation signatures. |
 | `modules` | Public facade/schema exports, including callable exports, schemas, values and types. |

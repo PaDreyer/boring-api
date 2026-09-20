@@ -41,6 +41,9 @@ importers:
       '@boringapi/core':
         specifier: workspace:^
         version: link:../../packages/core
+      '@boringapi/jobs-postgres':
+        specifier: workspace:^
+        version: link:../../packages/jobs-postgres
       express:
         specifier: ^4.18.2
         version: 4.18.2
@@ -227,6 +230,25 @@ importers:
         specifier: ^18.11.17
         version: 18.11.17
     devDependencies:
+      ts-node:
+        specifier: ^10.9.1
+        version: 10.9.1(@types/node@18.11.17)(typescript@4.9.4)
+      typescript:
+        specifier: ^4.9.4
+        version: 4.9.4
+
+  packages/jobs-postgres:
+    dependencies:
+      '@boringapi/core':
+        specifier: workspace:^
+        version: link:../core
+      pg:
+        specifier: ^8.23.0
+        version: 8.23.0
+    devDependencies:
+      '@types/pg':
+        specifier: 8.11.0
+        version: 8.11.0
       ts-node:
         specifier: ^10.9.1
         version: 10.9.1(@types/node@18.11.17)(typescript@4.9.4)

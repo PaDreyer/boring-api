@@ -1,9 +1,11 @@
 import { AuthModule, ConfigModule, Route, RouteScope, SetupModule } from "./types";
 import { scanApi, SourceScope } from "./conventions";
 import type { RouteModule } from "./types";
+import { JobDeclaration, validateJobDeclaration } from "./jobs";
 
 export interface Discovery {
     routes: Route[];
+    jobs: Map<string, JobDeclaration>;
     config?: ConfigModule;
     setup?: SetupModule;
     auth?: AuthModule;
@@ -48,6 +50,12 @@ export function discover(apiDirectory: string): Discovery {
     type Hook = { handler: (...args: any[]) => unknown };
     const hooks = new Map<string, Hook>();
     const routes = new Map<string, RouteModule>();
+    const jobs = new Map<string, JobDeclaration>();
+    for (const source of sources.jobs) {
+        const declaration = load(source.file) as unknown as JobDeclaration;
+        validateJobDeclaration(source.name, declaration);
+        jobs.set(source.name, Object.freeze({ ...declaration, policy: Object.freeze({ ...declaration.policy }) }));
+    }
     for (const contract of sources.contracts) {
         const file = contract.file;
         if (contract.kind === "route") routes.set(file, routeModule(file));
@@ -81,7 +89,7 @@ export function discover(apiDirectory: string): Discovery {
         })),
     });
     return {
-        config, setup, auth, rootScope: scope(sources.rootScope),
+        config, setup, auth, jobs, rootScope: scope(sources.rootScope),
         routes: sources.routes.map(route => ({ method: route.method, path: route.path,
             source: route.file, module: routes.get(route.file)!, scope: scope(route.scope) })),
     };

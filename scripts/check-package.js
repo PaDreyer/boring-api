@@ -132,6 +132,7 @@ async function serves(directory, entry) {
     }
 }
 async function main() {
+    let closeDatabase = async () => {};
     try {
         const packages = process.argv.slice(2).map(file => verifyArchive(resolve(file)));
         const core = packages.find(p => p.manifest.name === "@boringapi/core");
@@ -154,18 +155,66 @@ async function main() {
             assert.ok(initialized.dependencies[name], `${name} must be a runtime dependency after init`);
             assert.equal(initialized.devDependencies[name], undefined);
         }
-        run("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], consumer);
+        const jobsPackage = packages.find(p => p.manifest.name === "@boringapi/jobs-postgres");
+        initialized.dependencies["@boringapi/jobs-postgres"] = initialized.devDependencies["@boringapi/jobs-postgres"];
+        delete initialized.devDependencies["@boringapi/jobs-postgres"];
+        initialized.dependencies.pg = jobsPackage.manifest.dependencies.pg;
+        initialized.devDependencies["@types/pg"] = jobsPackage.manifest.devDependencies["@types/pg"];
+        json(join(consumer, "package.json"), initialized);
+        assert.ok(env.BORING_TEST_DATABASE_URL, "Set BORING_TEST_DATABASE_URL for the required compiled durable-worker verification");
+        const { Pool } = consumerRequire("pg");
+        const admin = new Pool({ connectionString: env.BORING_TEST_DATABASE_URL });
+        const schema = "packed_jobs_" + require("node:crypto").randomUUID().replace(/-/g, "");
+        await admin.query(`CREATE SCHEMA ${schema}`);
+        const databaseUrl = new URL(env.BORING_TEST_DATABASE_URL);
+        databaseUrl.searchParams.set("options", `-csearch_path=${schema}`);
+        env.DATABASE_URL = databaseUrl.toString();
+        const database = new Pool({ connectionString: env.DATABASE_URL });
+        closeDatabase = async () => { await database.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); };
+        // Explicit migration action, before either HTTP or worker startup.
+        await database.query(consumerRequire("@boringapi/jobs-postgres").jobMigration.sql);
+        run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund"], consumer);
         writeFileSync(join(consumer, "src/infra/lifetime.ts"), `export function acquire() {
     return { close() { console.info("resource disposed"); } };
 }
 `);
+        mkdirSync(join(consumer, "src/modules/dispatch/ports"), { recursive: true });
+        mkdirSync(join(consumer, "src/jobs/health/check"), { recursive: true });
+        writeFileSync(join(consumer, "src/modules/dispatch/ports/queue.ts"), `import type { ExecutionContext, JobReceipt } from "@boringapi/core";
+export interface Queue { enqueue(execution: ExecutionContext, input: {}): Promise<JobReceipt>; }
+`);
+        writeFileSync(join(consumer, "src/modules/dispatch/facade.ts"), `import type { ExecutionContext } from "@boringapi/core";
+import type { Queue } from "./ports/queue";
+export function createDispatch(queue: Queue) { return { enqueue(ctx: ExecutionContext, input: {}) { return queue.enqueue(ctx, input); } }; }
+`);
+        writeFileSync(join(consumer, "src/infra/jobs.ts"), `import { Pool } from "pg";
+import { createPostgresJobs } from "@boringapi/jobs-postgres";
+export function createQueue(url: string) { const pool = new Pool({ connectionString: url });
+    return { adapter: createPostgresJobs(pool), close: () => pool.end() }; }
+`);
+        writeFileSync(join(consumer, "src/http/+config.ts"), `import { z } from "zod";
+import type { ConfigEnvironment } from "./$types";
+export const schema = z.object({ databaseUrl: z.string() });
+export const load = (env: ConfigEnvironment) => ({ databaseUrl: env.DATABASE_URL });
+`);
+        writeFileSync(join(consumer, "src/jobs/health/check/job.ts"), `import { z } from "zod";
+import type { JobHandler } from "./$types";
+export const payload = z.object({}); export const version = 1;
+export const policy = { maxAttempts: 3, retryDelayMs: 10, timeoutMs: 1000 } as const;
+export const handler: JobHandler = async ctx => { await ctx.services.health.get(ctx.execution); console.info("compiled job executed"); };
+`);
         writeFileSync(join(consumer, "src/http/+setup.ts"), `import type { SetupContext } from "./$types";
 import { createHealth } from "$modules/health/facade";
 import { acquire } from "$infra/lifetime";
+import { createQueue } from "$infra/jobs";
+import { createDispatch } from "$modules/dispatch/facade";
 export function setup(ctx: SetupContext) {
     const resource = acquire();
     ctx.onClose("fixture", () => resource.close());
-    return { health: createHealth() };
+    const queue = createQueue(ctx.config.databaseUrl);
+    ctx.onClose("queue", () => queue.close());
+    const jobs = ctx.jobs(queue.adapter, {identity:{kind:"machine",id:"packed-worker",permissions:[]}});
+    return { health: createHealth(), dispatch: createDispatch(jobs.for("health/check")) };
 }
 `);
         writeFileSync(join(consumer, "src/server.ts"), `import { join } from "path";
@@ -185,6 +234,7 @@ main().catch(error => { console.error(error); process.exitCode = 1; });
         json(join(consumer, "tsconfig.json"), consumerConfig);
         run(process.execPath, [executable, "build", "src/http"], consumer);
         const publicApis = {
+            "@boringapi/jobs-postgres": "createPostgresJobs",
             "@boringapi/compiler": "readConfiguration",
             "@boringapi/compiler/register": "registerTypeScript",
             "@boringapi/typegen": "generateTypes",
@@ -199,7 +249,7 @@ main().catch(error => { console.error(error); process.exitCode = 1; });
             `import { ${method} } from "${name}"; void ${method};`).join("\n"));
         const compilerRequire = createRequire(consumerRequire.resolve("@boringapi/compiler/package.json"));
         run(process.execPath, [compilerRequire.resolve("typescript/bin/tsc"), "--noEmit", "--strict", "--esModuleInterop",
-            "--target", "es2020", "--module", "commonjs", "tool-apis.ts"], consumer);
+            "--target", "es2020", "--module", "commonjs", "--types", "node", "tool-apis.ts"], consumer);
         // Relocate the artifact into a fresh deployment containing no source or workspace links.
         const deployment = join(temporary, "deployment");
         mkdirSync(deployment);
@@ -209,7 +259,7 @@ main().catch(error => { console.error(error); process.exitCode = 1; });
         run("npm", ["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], deployment);
         rmSync(consumer, { recursive: true });
         const productionRequire = createRequire(join(deployment, "package.json"));
-        for (const name of ["typescript", "ts-node", ...packages.filter(p => p !== core).map(p => p.manifest.name)]) {
+        for (const name of ["typescript", "ts-node", ...packages.filter(p => p !== core && p !== jobsPackage).map(p => p.manifest.name)]) {
             assert.throws(() => productionRequire.resolve(name), { code: "MODULE_NOT_FOUND" }, `${name} must not be installed in production`);
         }
         assert.equal(typeof productionRequire("@boringapi/core").BoringApi, "function");
@@ -241,7 +291,34 @@ const { readHealth } = require("./artifact/executions/health.js");
         assert.match(controlled, /resource disposed/);
         assert.match(controlled, /controlled lifecycle verified/);
 
-        console.log(`All ${packages.length} tarballs verified: public APIs and declarations, documentation, CLI build, relocated HTTP/custom-server and controlled execution with cleanup, and npm ci --omit=dev without development packages.`);
-    } finally { rmSync(temporary, { recursive: true, force: true }); }
+        const enqueueOutput = run(process.execPath, ["-e", `
+const {BoringApi} = require("@boringapi/core");
+(async () => { const app=await new BoringApi().createApp(require("node:path").resolve("artifact/http"));
+try { const receipt=await app.execute({identity:{kind:"machine",id:"producer",permissions:[]}}, ctx => ctx.services.dispatch.enqueue(ctx.execution, {})); console.log("receipt="+receipt.id); }
+finally {await app.close();} })().catch(e=>{console.error(e);process.exitCode=1;});
+`], deployment);
+        const jobId = /receipt=([a-f0-9-]+)/.exec(enqueueOutput)?.[1]; assert.ok(jobId);
+        const worker = spawn(process.execPath, [join(deployment, "artifact/boring-worker.cjs")], {cwd:deployment,env,stdio:["ignore","pipe","pipe"]});
+        let workerOutput = "";
+        worker.stdout.on("data", chunk => {workerOutput += chunk;}); worker.stderr.on("data", chunk => {workerOutput += chunk;});
+        const workerExited = new Promise(resolve => worker.once("close", resolve));
+        try {
+            const end = Date.now() + 10000;
+            let completed = false;
+            while (Date.now() < end) {
+                const row = (await database.query("SELECT status FROM boring_jobs WHERE id=$1", [jobId])).rows[0];
+                if (row?.status === "succeeded") { completed = true; break; }
+                if (worker.exitCode !== null) break;
+                await new Promise(resolve => setTimeout(resolve, 30));
+            }
+            assert.ok(completed, `Compiled worker did not complete: ${workerOutput}`);
+        } finally {
+            worker.kill("SIGTERM"); const force = setTimeout(() => worker.kill("SIGKILL"), 5000);
+            await workerExited; clearTimeout(force);
+        }
+        assert.equal(worker.exitCode, 0, workerOutput); assert.equal(worker.signalCode, null);
+        assert.match(workerOutput, /compiled job executed/); assert.match(workerOutput, /resource disposed/);
+        console.log(`All ${packages.length} tarballs verified: public APIs and declarations, documentation, CLI build, relocated HTTP/custom-server and controlled execution with cleanup, compiled durable PostgreSQL worker with SIGTERM cleanup, and npm ci --omit=dev without development packages.`);
+    } finally { await closeDatabase(); rmSync(temporary, { recursive: true, force: true }); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

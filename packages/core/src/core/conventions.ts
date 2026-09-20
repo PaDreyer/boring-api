@@ -1,5 +1,5 @@
-import { Dirent, readdirSync, statSync } from "fs";
-import { extname, join, resolve } from "path";
+import { Dirent, existsSync, readdirSync, statSync } from "fs";
+import { dirname, extname, join, resolve } from "path";
 export { APPLICATION_ROLES, applicationRole, applicationDirectories, allowsModuleDependency, canonicalPath, withinDirectory } from "./roles";
 export type { ApplicationRole, RoleSource } from "./roles";
 
@@ -31,12 +31,39 @@ export interface ContractSource {
 
 export interface ApiSources {
     routes: RouteSource[];
+    jobs: JobSource[];
     contracts: ContractSource[];
     config?: string;
     setup?: string;
     auth?: string;
     rootScope: SourceScope;
     scopes: Map<string, SourceScope>;
+}
+
+export interface JobSource { name: string; file: string; }
+
+/** One named entry per folder. No executable helper files or side registries. */
+export function scanJobs(apiDirectory: string): JobSource[] {
+    const root = join(dirname(resolve(apiDirectory)), "jobs");
+    if (!existsSync(root)) return [];
+    const jobs: JobSource[] = [];
+    function walk(directory: string, parts: string[]) {
+        let found = false;
+        for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+            const file = join(directory, entry.name);
+            if (entry.isSymbolicLink()) throw new Error(`Job source must not contain symbolic links: ${file}`);
+            if (entry.isDirectory()) {
+                if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(entry.name)) throw new Error(`Invalid job directory: ${file}`);
+                walk(file, [...parts, entry.name]);
+            } else if (/\.[cm]?[jt]sx?$/.test(entry.name) && !entry.name.endsWith(".d.ts")) {
+                if (!parts.length || !/^job\.[jt]s$/.test(entry.name) || found) throw new Error(`Expected one jobs/<name>/job.ts or job.js declaration: ${file}`);
+                found = true;
+                jobs.push({ name: parts.join("/"), file });
+            }
+        }
+    }
+    walk(root, []);
+    return jobs.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** Shared by runtime error handling and static inspection. Layers are root to leaf. */
@@ -87,7 +114,7 @@ export function scanApi(apiDirectory: string): ApiSources {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error(`API directory does not exist: ${root}`);
         throw error;
     }
-    const tree: ApiSources = { routes: [], contracts: [], rootScope: { middleware: [], errors: [] }, scopes: new Map() };
+    const tree: ApiSources = { routes: [], jobs: scanJobs(root), contracts: [], rootScope: { middleware: [], errors: [] }, scopes: new Map() };
     const seenRoutes = new Map<string, string>();
     function walk(directory: string, inherited: SourceScope, segments: string[]) {
         const entries = readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));

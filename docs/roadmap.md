@@ -9,12 +9,12 @@ does not make an enforcement requirement complete.
 
 | Area | Current implementation | Remaining gap |
 | --- | --- | --- |
-| HTTP and execution | Filesystem routes and hooks share identity, cancellation and lifetime with controlled non-HTTP executions. | Durable jobs and other delivery runtimes follow in later milestones. |
+| HTTP and execution | Filesystem routes and hooks share identity, cancellation and lifetime with controlled non-HTTP executions. | Durable jobs now use the same lifecycle; other triggers follow later. |
 | Module boundaries | Shared roles and a mandatory dependency matrix, including split role files, unused source and same-module service caller restrictions. | Static structure cannot infer business meaning or replace permission tests. |
 | Service and adapter separation | Business modules use injected ports; concrete infrastructure imports and service forwarding fail checks. Schemas export data/Zod contracts; ports contain types only. | No semantic proof that a use case implements the correct domain rules. |
 | Dependency composition | Typed configuration, explicit facade/page factories, owned cleanup and checked setup exposure; only the first operation argument may carry a Core execution context. | Static analysis cannot prove that every acquired resource was registered or every asynchronous operation awaited. |
-| Discovery and tooling | Inspection v3 includes configuration, ownership and controlled execution files alongside role/dependency information. Generators and portable builds use mandatory checks. | Jobs, schedules, event consumers and application commands are not yet supported entry points. |
-| Database and web | The PostgreSQL reference reuses orders permissions and transaction boundaries through HTTP, pages and controlled execution; application shutdown owns the pool. | Durable delivery, idempotency and reliable event publication remain separate work. |
+| Discovery and tooling | Inspection v4 adds durable jobs, payloads, policies and facade calls alongside the common role model. Generators and portable builds use mandatory checks. | Schedules, event consumers and application commands are not yet supported entry points. |
+| Database and web | The PostgreSQL reference reuses orders permissions and transaction boundaries through HTTP, pages and controlled execution; application shutdown owns the pool. | Durable jobs and order idempotency are implemented; reliable event publication remains separate work. |
 
 Evidence lives in `packages/analyzer/src/architecture.ts`,
 `packages/analyzer/src/services.ts`, `packages/core/src/core/context.ts`,
@@ -152,21 +152,70 @@ or mode are provided; versioning and publication remain separate release actions
 
 ## Milestone 3 — Deliver background jobs end to end
 
-**Status: planned; depends on milestones 1 and 2.**
+**Status: complete, including independent audit corrections.**
 
-- [ ] Define the job declaration, payload contract, enqueue port, worker entry
+- [x] Define the job declaration, payload contract, enqueue port, worker entry
   point and adapter contract within the shared role model.
-- [ ] Provide a durable reference adapter with explicit delivery guarantees,
+- [x] Provide a durable reference adapter with explicit delivery guarantees,
   retries, idempotency expectations, failed-job handling and graceful shutdown.
-- [ ] Add job discovery, typed contexts, inspection, generators, development
+- [x] Add job discovery, typed contexts, inspection, generators, development
   behavior and compiled worker deployment together.
-- [ ] Extend the reference application so HTTP and a queued job invoke the same
+- [x] Extend the reference application so HTTP and a queued job invoke the same
   existing facade, with explicit human or machine authorization.
 
 **Acceptance:** execute a persisted job after process restart; demonstrate duplicate
 delivery, a failed attempt and shutdown during work. Verify the documented effects
 and permissions. Checks must reject a job that imports a service or database adapter
 directly. An in-memory callback demo alone does not satisfy this milestone.
+
+Implementation: `jobs/<name>/job.ts`, generated JobHandler/JobInputs, setup-owned
+named enqueue ports, application.runJob/work, PostgreSQL leases with fenced writes,
+retained failures and explicit replay, plus facade-owned order idempotency. See the
+[job reference](jobs.md) for the precise API, identity and delivery guarantees.
+
+| Acceptance | Evidence |
+| --- | --- |
+| Durable enqueue across process restart | `packages/jobs-postgres/test/postgres.test.ts`: exited producer and fresh compiler-free worker against actual PostgreSQL. |
+| Concurrent claims, killed worker recovery, exhausted attempts and stale fencing | The same PostgreSQL adapter suite exercises SQL locks/leases and retained failures. |
+| Retry, validation, unknown/versioned jobs, identity/tenant/correlation isolation | `packages/core/test/jobs.test.ts`, with supplemental in-memory protocol doubles. |
+| Business commit before lost acknowledgement, repeated business effects and explicit grants | `examples/fullstack/test/jobs.test.ts`: actual PostgreSQL order/audit/idempotency transaction, replay through the same facade and denied/regranted machine execution. |
+| Shutdown and lease-loss resource ownership | Core jobs suite covers cooperative cancellation, non-cooperative settlement, pending claims and shutdown timeout; lifecycle regressions remain required. |
+| Architecture, inspection, type generation, generator and builds | Analyzer jobs suite and scaffold integration tests cover forbidden imports, capability exposure, static catalog and source-derived generation. |
+| Development restart/cleanup and compiler-free production worker | Dev jobs test; `scripts/check-package.js` installs actual tarballs, relocates output, runs a producer and generated PostgreSQL worker without development packages, then verifies SIGTERM cleanup. |
+
+Independent GPT-6 Astra / High audit found two reproducible defects: Core namespace/
+element-access execution admission, and case-sensitive advisory locking of UUID
+idempotency keys. Both were corrected, covered by regressions and independently
+reproduced as fixed. Heartbeat I/O failures now propagate after safe settlement.
+The auditor also verified generated handler-context checks.
+
+A fresh audit additionally reproduced reflective facade replacement by jobs,
+lease writes accepted after waiting past expiry, and Unicode failure text rejected
+by JSONB. Corrections extend the job reflection guard, acquire the queue row lock
+before testing expiry, and preserve/sanitize diagnostic Unicode. Regression tests
+exercise aliases, all three fenced writes behind a real PostgreSQL row lock, and
+terminal error retention followed by successful processing. GPT-6 Astra / High
+independently reran the original reproductions and confirmed all three corrections;
+the focused follow-up reported no remaining findings.
+
+Final validation on Node.js 24.19.0 with an isolated PostgreSQL 17 instance:
+`pnpm build`, `pnpm example:check`, `pnpm typecheck`, `pnpm test`,
+`pnpm example:build` and `pnpm example:fullstack:build` all pass.
+The suite reports **188 passed, 0 failed, 0 skipped**. Actual durable-adapter and
+reference PostgreSQL tests ran; no infrastructure acceptance was skipped.
+All **nine actual tarballs** pass `scripts/check-package.js`: public APIs/declarations,
+documentation, relocated production-only installation, HTTP/custom-server/controlled
+execution, plus a persisted job executed by the separate generated worker and
+SIGTERM cleanup. No CLI, TypeScript or ts-node resolves in that deployment.
+CI now provisions PostgreSQL for test and package verification.
+
+Limits remain explicit: bounded at-least-once delivery, cooperative cancellation,
+possible overlapping effects after lease loss, application-owned idempotency,
+retained records without automatic pruning, and no atomic business-commit/enqueue
+coupling or outbox. Machine grants come from worker configuration, not user impersonation.
+The reference has no tenant ownership model. These are documented contract boundaries,
+not unexecuted acceptance checks. No commit or release
+is made by implementing this milestone. It requires the next platform minor on 0.x.
 
 ## Milestone 4 — Apply the model to schedules, events and commands
 

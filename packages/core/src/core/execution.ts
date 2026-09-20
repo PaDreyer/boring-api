@@ -8,6 +8,12 @@ export interface ExecutionIdentity {
 }
 
 declare const executionBrand: unique symbol;
+const contexts = new WeakSet<object>();
+/** Internal capability check for enqueueing; shape-compatible objects are not trusted. */
+export function assertExecution(context: ExecutionContext): void {
+    if (!contexts.has(context)) throw new TypeError("Enqueue requires a framework-created execution context");
+    context.throwIfAborted();
+}
 /** A framework-owned capability, never application data or a factory dependency. */
 export interface ExecutionContext<Identity extends ExecutionIdentity | undefined = ExecutionIdentity | undefined> {
     readonly [executionBrand]: true;
@@ -95,6 +101,7 @@ export class Execution {
                 if (owner.controller.signal.aborted) throw owner.controller.signal.reason;
             },
         }) as ExecutionContext;
+        contexts.add(this.context);
         const cancel = () => this.abort(new ExecutionError("cancelled", "Execution cancelled"));
         options.signal?.addEventListener("abort", cancel, { once: true });
         this.removeSignal = () => options.signal?.removeEventListener("abort", cancel);

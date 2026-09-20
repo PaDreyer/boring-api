@@ -116,12 +116,12 @@ export function initializeProject(directory: string, apiDirectory = "api"): Scaf
     }
     const api = apiPath(root, apiDirectory);
     const apiName = slash(relative(root, api));
-    if (["modules", "infra", "web", "executions"].includes(basename(api)) || inside(join(root, "dist"), api) || apiName === "test") {
+    if (["modules", "infra", "web", "executions", "jobs"].includes(basename(api)) || inside(join(root, "dist"), api) || apiName === "test") {
         throw new Error("Choose an API directory separate from modules, infra, web, executions, dist and the generated test directory.");
     }
     // An API tree may contain unrecognized files or a differently named route.
     // Initialization never adopts or modifies an existing application tree.
-    for (const folder of [api, ...["modules", "infra", "executions"].map(name => join(dirname(api), name))]) {
+    for (const folder of [api, ...["modules", "infra", "executions", "jobs"].map(name => join(dirname(api), name))]) {
         safePath(root, folder);
         if (stat(folder)) throw new Error(`Application directory already exists: ${folder}. Use boring inspect and boring add.`);
     }
@@ -262,4 +262,33 @@ export function addEndpoint(projectRoot: string, apiDirectory: string, name: str
         template ? `Reused ${routeName(template)}: the same schemas, access declarations and service calls, with matching inherited hooks. Review the new URL's intended behavior.` :
             "No matching adapter. Created a typed 501 handler; implement it using existing public schemas and ctx.services before serving data.",
     ] };
+}
+
+/** Generate a thin job entry from source-derived public operations and schemas. */
+export function addJob(projectRoot: string, apiDirectory: string, name: string, operation: string, payload: string, projectFile?: string): ScaffoldResult {
+    safePath(resolve(projectRoot), resolve(projectRoot));
+    const root = realpathSync(projectRoot);
+    if (!name.split("/").every(part => /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(part))) throw new Error("Use a lowercase job name such as orders/create.");
+    const api = apiPath(root, apiDirectory);
+    const project = checked(root, api, projectFile);
+    const catalog = inspectProject(project);
+    const access = operation.startsWith("ctx.services.") ? operation : `ctx.services.${operation}`;
+    const found = catalog.services.flatMap(service => service.operations).find(entry => entry.access === access);
+    if (!found || !found.signatures.some(signature => signature.parameters.length === 2 && signature.parameters[0].type.includes("ExecutionContext"))) {
+        throw new Error(`Choose an existing facade operation with (execution, payload) using boring inspect: ${operation}`);
+    }
+    const match = /^([a-z][a-z0-9-]*)\.([A-Za-z_$][\w$]*)$/.exec(payload);
+    const contract = match && catalog.modules.find(module => module.name === match[1])?.schemas?.exports.find(entry => entry.name === match[2] && entry.kind === "schema");
+    if (!match || !contract) throw new Error(`Choose an existing public payload schema as module.export: ${payload}`);
+    const target = join(dirname(api), "jobs", name, "job.ts");
+    const content = [
+        `import { ${match[2]} as input } from "$modules/${match[1]}/schemas";`,
+        'import type { JobHandler } from "./$types";', "",
+        "export const payload = input;", "export const version = 1;",
+        "export const policy = { maxAttempts: 3, retryDelayMs: 1000, timeoutMs: 30000 } as const;",
+        `export const handler: JobHandler = async ctx => { await ${access}(ctx.execution, ctx.payload); };`, "",
+    ].join("\n");
+    const files = writeChanges(root, [{ file: target, content }], () => { checked(root, api, projectFile, true); }, () => { analyzeProject(root, api, projectFile); });
+    return { files, notes: [`Reused ${found.access} and ${payload}. Review idempotency and retry policy.`,
+        `Bind the durable adapter with ctx.jobs in setup, configure explicit machine grants, and inject jobs.for(${JSON.stringify(name)}) through the owning module's port. No permissions were generated.`] };
 }

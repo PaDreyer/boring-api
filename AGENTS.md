@@ -12,7 +12,7 @@ The package entry point is `README.md`; lead it with this architectural promise 
 - Give every responsibility a named, discoverable role and define its imports, exports, calls and lifetime. Prefer predictable decomposition into convention-following files. Generic private/internal/helper code must not become an architectural escape hatch.
 - Documentation alone does not enforce a pattern. Deliver the shared convention model, checks and bypass tests, inspection, generation, runtime behavior where needed, and a reference example together. Checks remain mandatory.
 - Treat current permissive behavior as an implementation gap when it conflicts with the vision. Do not preserve it as a design principle, widen rules to make an example pass, or claim a target rule is already enforced.
-- Work through the roadmap's dependency order. Keep incomplete acceptance criteria open and update status with concrete implementation and test evidence. Role enforcement and the common execution lifecycle are complete; durable background jobs are the next milestone. Preserve the lifecycle contract when adding runtimes.
+- Work through the roadmap's dependency order. Keep incomplete acceptance criteria open and update status with concrete implementation and test evidence. Role enforcement and the common execution lifecycle are complete; durable background jobs are implemented; schedules, general events and commands follow next. Preserve the lifecycle contract when adding runtimes.
 
 ## Where things belong
 
@@ -56,6 +56,7 @@ The package entry point is `README.md`; lead it with this architectural promise 
 - Use the public `BoringApi.createApp()` and `BoringApi.listen()` API. Do not add legacy aliases or compatibility modes.
 - Architecture checks are mandatory in `boring check`; do not add switches to disable them.
 - Keep architecture analysis static, including unused source, aliases, re-exports and literal CommonJS imports. Diagnose unsupported dynamic loading instead of silently skipping it. Use stable `BORING` diagnostic codes with source locations.
+- Durable jobs use sibling `jobs/<name>/job.ts`, generated JobHandler, and the same injected facade. Bind the optional PostgreSQL adapter in setup via `ctx.jobs`, inject named enqueue ports, and keep queue capabilities out of services. Preserve at-least-once delivery, lease fencing and business idempotency; see `docs/jobs.md`.
 - Production starts with Node and the generated `<outDir>/boring-start.cjs` or a compiled custom server. Never import compiler registration from a production server. `boring start` is a development convenience.
 - The published `@boringapi/cli` package exposes consumer commands through `package.json#bin` as `boring`. Repository scripts use the `example:*` prefix when they run the bundled example; do not confuse them with commands copied into consumer projects.
 - Keep everything needed at runtime or by the public declaration files in `dependencies`. Each packed tarball contains its compiled package, README, consumer documentation in `docs`, and license without source or example files. Only CLI ships the `boring` executable. Core must install and serve compiled applications without CLI, `typescript` or `ts-node`. Keep the `@boringapi/core/agent-guide` locator working; verify the actual tarball with `scripts/check-package.js`.

@@ -9,8 +9,8 @@ The [project vision](vision.md) explains the common architecture: entry points
 delegate to facades, facades coordinate services, and business code uses injected
 ports implemented by infrastructure. Follow the enforced [role contract](architecture.md), including its splitting
 conventions and public operation shapes. The [roadmap](roadmap.md) identifies
-the remaining enforcement and backend-runtime work; planned jobs, schedules, events
-and commands are not yet shipped framework conventions. Use the current references
+the remaining enforcement and backend-runtime work; [durable jobs](jobs.md) are supported; schedules, general events
+and commands remain planned. Use the current references
 for available APIs and do not invent parallel entry-point or service registries.
 
 Install `@boringapi/core` and `zod` as runtime dependencies, and `@boringapi/cli`
@@ -25,7 +25,7 @@ package runtime code; the architecture checker rejects those imports, including 
 re-exports. `boring init` places Core and Zod only in `dependencies` and CLI only in
 `devDependencies`, preserving existing versions and reporting moves. Conflicting
 versions across those sections must be resolved before initialization. Build output
-reserves `boring-start.cjs` and `.boring-build.json`; avoid source files or directories
+reserves `boring-start.cjs`, `boring-worker.cjs` and `.boring-build.json`; avoid source files or directories
 that emit to those paths and keep output separate from `.boring/build.json`.
 See [deployment](cli.md) and [package responsibilities and APIs](packages.md).
 
@@ -47,6 +47,9 @@ updating them. Framework release automation is documented in the
 4. Extend the module that already owns the behavior. Search public facades and
    schemas, then its private service and storage port. Keep one
    implementation of each business operation across HTTP, jobs and web pages.
+   Job handlers call injected facades without replacing their methods; reflective
+   mutation through `Object`/`Reflect`, including extracted/destructured methods,
+   fails the same mandatory architecture checks.
 
 Direct CLI commands below assume `api/`. Pass `--dir src/api` (or the actual API
 path) and `--project <tsconfig>` when needed. Generated package scripts already
@@ -67,6 +70,7 @@ before invoking their CLI. See [inspection](inspection.md) and [CLI configuratio
 | Growing implementation | Use `facade/`, `services/`, `schemas/` and `ports/` parts. Generic helper/internal files are rejected. Services cannot call peer services. Other modules use public facade operations and schemas. |
 | Configuration | Root `+config.ts`: export Zod `schema` and data-only `load(env)`. Setup reads validated `ctx.config`. |
 | Database or external SDK | Sibling `infra/`; implement typed ports, construct adapters in setup, immediately register `ctx.onClose`, and inject them into facades. |
+| Durable job | Sibling `jobs/<name>/job.ts`; validate payload and call the injected facade. Bind an enqueue port in setup, enforce business access and idempotency. [Job rules](jobs.md). |
 | Controlled non-HTTP invocation | Sibling `executions/`; call `application.execute` with a trusted identity, then the existing injected facade. |
 | Authentication or route access | Root `+auth.ts`; reuse the application's identity provider and permission catalog. |
 | Shared request behavior | Named `+middleware`, `+envelope` or `+error` hooks at the appropriate URL scope. |
@@ -197,7 +201,7 @@ project. `GET /health` returns HTTP 200 with `{"status":"ok"}`.
   Empty handlers return 204; the nearest envelope wraps successful payloads unless
   `envelope = false`. [Request lifecycle and hook contexts](reference.md).
 - **Checks:** `boring check` is mandatory; fix `BORING` diagnostics at their source.
-  Dev/start are not substitutes for static checks. Raw storage through setup,
+  Dev runs these checks before startup/reload; compiled start assumes a checked build. Raw storage through setup,
   service re-exports and same-module boundary bypasses are rejected. The checker
   does not infer business meaning, prove permission policy or sandbox JavaScript.
   Keep permission, transaction and lifetime behavior covered by application tests.
@@ -231,7 +235,7 @@ See [database and web patterns](web.md) for client contracts and a runnable refe
 ## Develop, verify and deploy
 
 - Use the project's scripts. `npm run dev` watches the API and sibling `modules`,
-  `infra` and `web` source; frontend tooling handles browser assets separately.
+  `infra`, `jobs`, `executions` and `web` source; frontend tooling handles browser assets separately.
 - Finish changes with `npm run check`, `npm test` and `npm run build` (or the
   project's equivalent). Add meaningful behavior tests, including direct facade
   permission tests where callers can bypass HTTP.

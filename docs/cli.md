@@ -320,3 +320,11 @@ registration is exported from `@boringapi/compiler/register`. Analysis, builds,
 scaffolding and the development server have their own packages. CLI only dispatches
 to their public APIs; Core depends on none of them. See
 [package responsibilities and programmatic APIs](packages.md).
+
+## Job workers
+
+Use `boring add job <name> --from <service.operation> --payload <module.schema>`
+to reuse an inspected facade. `boring dev --worker` checks and watches source jobs;
+`boring worker` starts compiled jobs without HTTP. Production uses the generated
+`node dist/boring-worker.cjs`. See [durable jobs](jobs.md) for configuration,
+migrations, grants, retries and shutdown.

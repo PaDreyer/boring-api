@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { get } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { it } from "node:test";
 
@@ -27,8 +27,13 @@ it("the development server reloads sibling modules and infra, including newly cr
     const application = join(root, "app");
     const api = join(application, "http");
     mkdirSync(api, { recursive: true });
+    mkdirSync(join(root, "node_modules/@boringapi"), { recursive: true });
+    const core = dirname(require.resolve("@boringapi/core/package.json"));
+    symlinkSync(core, join(root, "node_modules/@boringapi/core"));
+    symlinkSync(join(core, "node_modules/zod"), join(root, "node_modules/zod"));
+    symlinkSync(join(core, "node_modules/@types"), join(root, "node_modules/@types"));
     writeFileSync(join(root, "package.json"), '{"name":"dev-consumer","private":true}\n');
-    writeFileSync(join(root, "tsconfig.json"), JSON.stringify({ compilerOptions: {
+    writeFileSync(join(root, "tsconfig.json"), JSON.stringify({ extends: "./.boring/tsconfig.json", compilerOptions: {
         module: "commonjs", target: "ES2020", allowJs: true,
     }, include: ["app/**/*"] }));
     // Dev must use the same project configuration as check/build, rather than
@@ -140,4 +145,39 @@ it("the development server reloads sibling modules and infra, including newly cr
         }
         rmSync(root, { recursive: true, force: true });
     }
+});
+
+it("restarts a checked job worker on declaration changes and awaits application cleanup without HTTP", async () => {
+    const root = mkdtempSync(join(tmpdir(), "boring-dev-jobs-"));
+    const write = (file: string, content: string) => { mkdirSync(dirname(join(root, file)), { recursive: true }); writeFileSync(join(root, file), content); };
+    const core = dirname(require.resolve("@boringapi/core/package.json"));
+    mkdirSync(join(root, "node_modules/@boringapi"), { recursive: true }); symlinkSync(core, join(root, "node_modules/@boringapi/core"));
+    symlinkSync(join(core, "node_modules/zod"), join(root, "node_modules/zod")); symlinkSync(join(core, "node_modules/@types"), join(root, "node_modules/@types"));
+    write("package.json", '{"name":"dev-jobs","private":true}');
+    write("tsconfig.json", JSON.stringify({ extends: "./.boring/tsconfig.json", compilerOptions: {strict:true,skipLibCheck:true,module:"commonjs",target:"ES2020"}, include:["**/*.ts"] }));
+    write("modules/health/facade.ts", 'import type {ExecutionContext} from "@boringapi/core"; export function createHealth() { return {run(ctx:ExecutionContext) {ctx.throwIfAborted(); return "ok";} }; }');
+    write("infra/queue.ts", `import type {JobAdapter} from "@boringapi/core";
+export function createQueue(): JobAdapter { let first = true; return {
+async enqueue() {}, async renew(){return true;}, async succeed(){return true;}, async fail(){return true;},
+async claim() {if(!first)return; first=false; return {id:"fixture",name:"health/check",version:1,payload:{},attempt:1,token:"fixture",origin:{identity:{kind:"machine",id:"test"},correlationId:"origin"},policy:{maxAttempts:1,retryDelayMs:10,timeoutMs:1000}};}
+}; }`);
+    write("api/+setup.ts", `import type {SetupContext} from "./$types"; import {createQueue} from "$infra/queue"; import {createHealth} from "$modules/health/facade";
+export function setup(ctx:SetupContext) {ctx.onClose("test", async()=>{await new Promise(r=>setTimeout(r,20));console.info("worker disposed");});
+ctx.jobs(createQueue(),{identity:{kind:"machine",id:"worker",permissions:[]}}); return {health:createHealth()};}`);
+    const declaration = (text: string) => `import {z} from "zod"; import type {JobHandler} from "./$types";
+export const payload=z.object({}); export const version=1; export const policy={maxAttempts:1,retryDelayMs:10,timeoutMs:1000};
+export const handler:JobHandler=async ctx=>{ctx.services.health.run(ctx.execution);console.info(${JSON.stringify(text)});};`;
+    write("jobs/health/check/job.ts", declaration("job-run-one"));
+    const child = spawn(process.execPath, ["-e", `const {startDevServer}=require(${JSON.stringify(join(__dirname, "../dist"))});
+const worker=startDevServer(process.cwd(),"api",0,undefined,true);process.once("SIGTERM",()=>worker.close());`], {cwd:root,stdio:["ignore","pipe","pipe"]});
+    let output=""; child.stdout.on("data",chunk=>{output+=chunk;});child.stderr.on("data",chunk=>{output+=chunk;});
+    const exited=new Promise<void>(resolve=>child.once("close",()=>resolve()));
+    const waitFor=async(text:string)=>{const end=Date.now()+15000;while(Date.now()<end&&!output.includes(text)&&child.exitCode===null)await delay(25);assert.ok(output.includes(text),output);};
+    try {
+        await waitFor("job-run-one"); write("jobs/health/check/job.ts", declaration("job-run-two")); await waitFor("job-run-two");
+        assert.ok(output.indexOf("worker disposed")<output.indexOf("job-run-two"));assert.doesNotMatch(output,/Listening on port/);
+    } finally {
+        child.kill("SIGTERM"); const force=setTimeout(()=>child.kill("SIGKILL"),5000);await exited;clearTimeout(force);rmSync(root,{recursive:true,force:true});
+    }
+    assert.equal(child.signalCode,null); assert.equal((output.match(/worker disposed/g)??[]).length,2);
 });

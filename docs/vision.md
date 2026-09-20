@@ -61,7 +61,7 @@ contracts they implement.
 | Transport and trigger handling | A named entry point validates its external input, establishes execution identity and delegates to a facade. It does not compose services or access storage. |
 | Public application operations | A facade exposes use cases, enforces application access and coordinates services and transaction boundaries. Cross-module workflows use other modules' public facades. |
 | Business rules | Services implement the owning module's domain behavior. Entry points, unrelated files and other modules cannot call them directly. Splitting files does not confer additional access. |
-| Data and effect contracts | Schemas describe data; repositories describe storage needs; other ports describe effects such as mail, file storage or message publication. These contracts do not initialize clients or perform I/O. |
+| Data and effect contracts | Schemas describe data; type-only ports describe storage needs and effects such as mail, file storage or message publication. These contracts do not initialize clients or perform I/O. |
 | Infrastructure | Adapters implement those contracts using database drivers, queues, SDKs and other integrations. They do not call business services or facades. |
 | Composition and lifetime | A defined application bootstrap validates configuration, constructs dependencies and owns startup, shutdown and resource disposal. Wiring does not become an alternative place for business workflows. |
 | Execution state | Each request, job attempt, event delivery or command invocation has its own context. Identity, tenant, correlation and cancellation data do not live in shared instances or module globals. |

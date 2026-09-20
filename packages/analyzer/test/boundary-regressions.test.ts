@@ -118,7 +118,7 @@ it("accepts inline type imports and exports across ports, adapters and setup", (
         "api/+setup.ts": 'import type { SetupContext } from "@boringapi/core"; import { type Store } from "../modules/orders/ports/storage"; import { create } from "../modules/orders/facade"; import { store } from "../infra/store"; export function setup(ctx: SetupContext) { const port: Store = store; ctx.assign({ orders: create(port) }); ctx.set("name", "ok"); return { orders: create(port) }; }',
     }, result => {
         assert.deepEqual(result.architecture.map(error => error.message), []);
-        assert.equal(inspectProject(result).schemaVersion, 3);
+        assert.equal(inspectProject(result).schemaVersion, 4);
     });
 });
 
@@ -260,7 +260,7 @@ export function create(runner: Runner<ExecutionContext>) {
 }`,
     }, result => {
         assert.deepEqual(result.architecture.map(error => error.message), []);
-        assert.equal(inspectProject(result).schemaVersion, 3);
+        assert.equal(inspectProject(result).schemaVersion, 4);
     });
 });
 

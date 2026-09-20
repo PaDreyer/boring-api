@@ -3,9 +3,9 @@ import { existsSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { formatDiagnostics } from "@boringapi/compiler";
 import { analyzeProject, synchronizeProject, formatArchitectureDiagnostics, formatInspection, inspectProject } from "@boringapi/analyzer";
-import { buildProject, startProject } from "@boringapi/build";
+import { buildProject, startProject, startWorker } from "@boringapi/build";
 import { startDevServer } from "@boringapi/dev";
-import { addEndpoint, addModule, initializeProject, ScaffoldResult } from "@boringapi/scaffold";
+import { addEndpoint, addJob, addModule, initializeProject, ScaffoldResult } from "@boringapi/scaffold";
 
 interface Arguments {
     command: string;
@@ -14,6 +14,7 @@ interface Arguments {
     outputDirectory?: string;
     port: number;
     json: boolean;
+    worker: boolean;
     projectFile?: string;
 }
 
@@ -24,6 +25,7 @@ function parseArguments(argv: string[]): Arguments {
     let outputDirectory: string | undefined;
     let port = Number(process.env.PORT ?? 4040);
     let json = false;
+    let worker = false;
     let projectFile: string | undefined;
     for (let index = 1; index < argv.length; index++) {
         const value = argv[index];
@@ -38,7 +40,9 @@ function parseArguments(argv: string[]): Arguments {
             if (explicitDirectory) throw new Error("Specify only one API directory.");
             apiDirectory = argument();
             explicitDirectory = true;
-        } else if (value === "--out-dir" && command === "start") {
+        } else if (value === "--worker" && command === "dev") {
+            worker = true;
+        } else if (value === "--out-dir" && ["start", "worker"].includes(command)) {
             outputDirectory = argument();
         } else if (value === "--json" && command === "inspect") {
             json = true;
@@ -55,7 +59,7 @@ function parseArguments(argv: string[]): Arguments {
     if (!Number.isInteger(port) || port < 0 || port > 65535) {
         throw new Error("--port must be an integer between 0 and 65535");
     }
-    return { command, apiDirectory, explicitDirectory, outputDirectory, port, json, projectFile };
+    return { command, apiDirectory, explicitDirectory, outputDirectory, port, json, worker, projectFile };
 }
 
 function projectRoot(from: string): string {
@@ -101,8 +105,10 @@ function usage(): void {
 Usage:
   boring init [project-directory] [--dir api]
   boring add module <name> [--dir api]
+  boring add job <name> --from <service.operation> --payload <module.schema> [--dir api]
   boring add endpoint <path/method> [--dir api] [--from path/method]
-  boring dev [api-directory] [--port 4040]
+  boring dev [api-directory] [--port 4040] [--worker]
+  boring worker [compiled-api-directory] [--out-dir directory | --project tsconfig]
   boring check [api-directory]
   boring inspect [api-directory] [--json]
   boring build [api-directory]
@@ -118,29 +124,32 @@ function scaffold(argv: string[]): void {
     const positional: string[] = [];
     let api = "api";
     let from: string | undefined;
+    let payload: string | undefined;
     let project: string | undefined;
     for (let index = 1; index < argv.length; index++) {
         const value = argv[index];
-        if (["--dir", "--from", "--project"].includes(value)) {
+        if (["--dir", "--from", "--project", "--payload"].includes(value)) {
             const argument = argv[++index];
             if (!argument || argument.startsWith("--")) throw new Error(`${value} requires a value.`);
             if (value === "--dir") api = argument;
             else if (value === "--from") from = argument;
+            else if (value === "--payload") payload = argument;
             else project = argument;
         } else if (value.startsWith("-")) throw new Error(`Unknown option: ${value}`);
         else positional.push(value);
     }
     let result: ScaffoldResult;
     if (argv[0] === "init") {
-        if (positional.length > 1 || from !== undefined || project !== undefined) throw new Error("Usage: boring init [project-directory] [--dir api]");
+        if (positional.length > 1 || from !== undefined || project !== undefined || payload !== undefined) throw new Error("Usage: boring init [project-directory] [--dir api]");
         result = initializeProject(resolve(process.cwd(), positional[0] ?? "."), api);
     } else {
         const [kind, name] = positional;
-        if (positional.length !== 2 || !["module", "endpoint"].includes(kind) || (from !== undefined && kind !== "endpoint")) {
+        if (positional.length !== 2 || !["module", "endpoint", "job"].includes(kind) || (from !== undefined && kind === "module") || (payload !== undefined && kind !== "job")) {
             throw new Error("Usage: boring add module <name> or boring add endpoint <path/method> [--from path/method], with optional --dir and --project.");
         }
         const root = projectRoot(process.cwd());
-        result = kind === "module" ? addModule(root, api, name, project) : addEndpoint(root, api, name, from, project);
+        if (kind === "job" && (!from || !payload)) throw new Error("Usage: boring add job <name> --from <service.operation> --payload <module.schema>");
+        result = kind === "job" ? addJob(root, api, name, from!, payload!, project) : kind === "module" ? addModule(root, api, name, project) : addEndpoint(root, api, name, from, project);
     }
     for (const file of result.files) console.info(`Wrote ${file}`);
     for (const note of result.notes) console.info(note);
@@ -156,18 +165,22 @@ async function main(): Promise<void> {
         case "check":
         case "inspect":
         case "build": process.exitCode = check(root, args); break;
+        case "worker":
         case "start": {
-            const application = await startProject(root, {
+            const application = await (args.command === "worker" ? startWorker : startProject)(root, {
                 apiDirectory: args.explicitDirectory ? args.apiDirectory : undefined,
                 outputDirectory: args.outputDirectory, projectFile: args.projectFile,
             }, args.port);
             for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => {
                 void application.close().catch(error => { console.error(error); process.exitCode = 1; });
             });
+            if (args.command === "worker") {
+                try { await application.work(); } finally { await application.close(); }
+            }
             break;
         }
         case "dev": {
-            const server = startDevServer(root, args.apiDirectory, args.port, args.projectFile);
+            const server = startDevServer(root, args.apiDirectory, args.port, args.projectFile, args.worker);
             process.once("SIGINT", () => { void server.close().then(() => process.exit(130)); });
             process.once("SIGTERM", () => { void server.close().then(() => process.exit(143)); });
             break;

@@ -1,7 +1,8 @@
 import { Logger } from "./logger";
 import { LifecycleError } from "./lifecycle";
+import { JobAdapter, JobBindings, JobDeclaration, JobOptions, JobRuntime } from "./jobs";
 
-const owners = new WeakMap<object, { seal(): void; dispose(): Promise<void> }>();
+const owners = new WeakMap<object, { seal(): void; dispose(): Promise<void>; jobs: JobRuntime }>();
 
 /** Internal ownership API, intentionally absent from Core public exports. */
 export function setupLifecycle(context: object) {
@@ -11,16 +12,21 @@ export function setupLifecycle(context: object) {
 }
 
 /** Shared dependencies; execution state never belongs here. */
-export class SetupContext<Config = Readonly<Record<string, never>>> extends Map<string, unknown> {
+export class SetupContext<Config = Readonly<Record<string, never>>, Jobs = Record<string, never>> extends Map<string, unknown> {
     private readonly serviceValues: Record<string, unknown> = {};
     private readonly cleanup: { name: string; dispose: () => void | Promise<void> }[] = [];
     private sealed = false;
     private disposal?: Promise<void>;
 
-    constructor(readonly config: Config = {} as Config) {
+    constructor(readonly config: Config = {} as Config, declarations: ReadonlyMap<string, JobDeclaration> = new Map()) {
         super();
         this.set("logger", new Logger());
-        owners.set(this, { seal: () => this.seal(), dispose: () => this.dispose() });
+        owners.set(this, { seal: () => this.seal(), dispose: () => this.dispose(), jobs: new JobRuntime(declarations) });
+    }
+    /** Bind infrastructure during composition. Inject a named port into a facade, never return it from setup. */
+    jobs(adapter: JobAdapter, options: JobOptions): JobBindings<Jobs> {
+        if (this.sealed) throw new Error("Jobs can only be configured during setup");
+        return setupLifecycle(this).jobs.bind<Jobs>(adapter, options);
     }
     /** Register immediately after acquisition, before any later fallible startup step. */
     onClose(name: string, dispose: () => void | Promise<void>): void {

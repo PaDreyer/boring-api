@@ -4,6 +4,8 @@ import type { Order } from "../schemas";
 /** SQL adapters implement this port without exposing pg to business code. */
 export interface OrderStore {
     newId(): string;
+    reserve(requestId: string): Promise<Order | undefined>;
+    remember(requestId: string, order: Order): Promise<void>;
     insert(order: Order): Promise<void>;
     recordCreation(order: Order, actorId: string): Promise<void>;
     find(id: string): Promise<Order | undefined>;

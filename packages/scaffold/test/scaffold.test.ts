@@ -282,3 +282,21 @@ it("rejects traversal, ambiguous casing, symlinks and invalid existing applicati
     assert.throws(() => addModule(root, "api", "invoices"), /BORING104/);
     assert.equal(existsSync(join(root, "modules/invoices")), false);
 });
+
+it("generates jobs by reusing inspected facade operations and public schemas without inventing grants", async () => {
+    const { addJob } = await import("../src");
+    const root = fixture();
+    write(root, "modules/health/facade.ts", 'import type { ExecutionContext } from "@boringapi/core"; export function createHealth() { return { get(ctx: ExecutionContext, input: {status:"ok"}) {ctx.throwIfAborted(); return input;} }; }');
+    // Keep the existing HTTP entry aligned with this fixture's payload-bearing operation.
+    write(root, "api/health/get.ts", 'import type {GetHandler} from "./$types"; export const handler: GetHandler = ctx => ctx.services.health.get(ctx.execution, {status:"ok"});');
+    write(root, "executions/health.ts", readFileSync(join(root, "executions/health.ts"), "utf8").replace("services.health.get(execution)", 'services.health.get(execution, {status:"ok"})'));
+    const result = addJob(root, "api", "health/check", "health.get", "health.health");
+    assert.deepEqual(result.files, ["jobs/health/check/job.ts"]);
+    const text = readFileSync(join(root, result.files[0]), "utf8");
+    assert.match(text, /ctx.services.health.get\(ctx.execution, ctx.payload\)/); assert.doesNotMatch(text, /permissions/);
+    const project = checked(root); assert.equal(inspectProject(project).jobs[0].name, "health/check");
+    assert.equal(buildProject(project).diagnostics.length, 0);
+    assert.ok(existsSync(join(root, "dist/boring-worker.cjs")));
+    assert.throws(() => addJob(root, "api", "health/check", "health.get", "health.health"), /overwrite/);
+    assert.throws(() => addJob(root, "api", "health/unknown", "missing.op", "health.health"), /existing facade/);
+});

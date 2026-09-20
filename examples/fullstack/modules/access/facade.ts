@@ -1,7 +1,7 @@
-import { requirePermissions } from "@boringapi/core";
+import { requirePermissions, type ExecutionIdentity } from "@boringapi/core";
 import type { Actor, AuthorizationRule } from "./schemas";
 
-export function requireAccess(actor: Actor, rule: AuthorizationRule): void {
+export function requireAccess(actor: ExecutionIdentity, rule: AuthorizationRule): void {
     requirePermissions(actor.permissions, rule);
 }
 

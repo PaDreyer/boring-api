@@ -1,13 +1,13 @@
 import { ChildProcess, spawn } from "child_process";
 import { readdirSync, watch, FSWatcher } from "fs";
 import { basename, dirname, join, resolve } from "path";
-import { synchronizeProject } from "@boringapi/analyzer";
+import { analyzeProject, formatArchitectureDiagnostics } from "@boringapi/analyzer";
 
 export interface DevServer { close(): Promise<void>; }
 
 function watchDirectories(directory: string, onChange: () => void): () => void {
     const parent = dirname(directory);
-    const names = new Set([basename(directory), "modules", "infra", "web", "executions"]);
+    const names = new Set([basename(directory), "modules", "infra", "web", "executions", "jobs"]);
     let watchers: FSWatcher[] = [];
     let timer: NodeJS.Timeout | undefined;
     let stopped = false;
@@ -52,11 +52,12 @@ function watchDirectories(directory: string, onChange: () => void): () => void {
     };
 }
 
-export function startDevServer(root: string, apiDirectory: string, port = 4040, projectFile?: string): DevServer {
+export function startDevServer(root: string, apiDirectory: string, port = 4040, projectFile?: string, worker = false): DevServer {
     root = resolve(root);
     const api = resolve(root, apiDirectory);
     const sync = () => {
-        const result = synchronizeProject(root, apiDirectory, projectFile);
+        const result = analyzeProject(root, apiDirectory, projectFile);
+        if (result.diagnostics.length || result.architecture.length) throw new Error("Fix check diagnostics before development startup: " + result.diagnostics.map(d => d.messageText).join("\n") + "\n" + formatArchitectureDiagnostics(result.architecture, root));
         console.info(`Generated ${result.files.length} type file${result.files.length === 1 ? "" : "s"}.`);
     };
     sync();
@@ -81,7 +82,7 @@ export function startDevServer(root: string, apiDirectory: string, port = 4040, 
     const start = () => {
         if (stopping) return;
         const spawned = spawn(process.execPath, [join(__dirname, "worker.js"), root, api, String(port),
-            ...(projectFile ? [resolve(root, projectFile)] : [])], {
+            projectFile ? resolve(root, projectFile) : "", worker ? "jobs" : "http"], {
             cwd: root,
             stdio: "inherit",
         });

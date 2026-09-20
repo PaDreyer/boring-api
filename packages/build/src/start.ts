@@ -10,6 +10,12 @@ export interface StartOptions {
     projectFile?: string;
 }
 
+/** Start the compiled worker owner without opening an HTTP listener. */
+export async function startWorker(root: string, options: StartOptions = {}) {
+    const application = await new BoringApi().createApp(resolveStartDirectory(root, options));
+    return application;
+}
+
 /** Development convenience for launching an existing compiled application. */
 export function startProject(root: string, options: StartOptions = {}, port = 4040) {
     return new BoringApi().listen(resolveStartDirectory(root, options), port);

@@ -23,6 +23,7 @@ between current support and target behavior when updating status and release not
 The repository uses native pnpm workspaces:
 
 ```text
+packages/jobs-postgres/ durable PostgreSQL queue runtime and explicit migration
 packages/core/       HTTP runtime, browser client and filesystem conventions
 packages/compiler/   TypeScript configuration, resolution and source registration
 packages/typegen/    route, hook and browser contract generation
@@ -94,9 +95,11 @@ compiled servers do not import compiler registration. Production deployments use
 Core and ordinary Node, without CLI or TypeScript.
 
 See the [basic example](examples/basic/README.md) and the
-[fullstack example](examples/fullstack/README.md). The optional PostgreSQL test
-requires `BORING_TEST_DATABASE_URL` pointing to an isolated test database; without
-it, that test is skipped.
+[fullstack example](examples/fullstack/README.md). The PostgreSQL integration tests
+require `BORING_TEST_DATABASE_URL` pointing to an isolated test database; without
+it, those tests are skipped. Completion of durable-job acceptance requires them.
+CI provides an isolated PostgreSQL service. The tarball checker requires this URL
+for its compiled worker proof, including runtime adapter installation and SIGTERM cleanup.
 
 ## Documentation and package checks
 
@@ -127,7 +130,8 @@ the CLI build, relocates the output and installs a fresh deployment with
 `npm ci --omit=dev`. No development package, TypeScript or ts-node may resolve in
 production; HTTP requests verify the generated and custom Node entry points, SIGTERM verifies
 resource cleanup, and a controlled non-HTTP invocation uses the same compiled facade
-before closing its owner.
+before closing its owner. A separate producer persists a job, then the generated
+worker executes it using the actual PostgreSQL adapter in that clean deployment.
 The checker needs npm registry access. CI runs it on every supported Node version
 and before publishing.
 

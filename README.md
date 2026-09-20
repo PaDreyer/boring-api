@@ -14,8 +14,8 @@ It uses TypeScript, Express 4 and Zod 3.
 - **Typed HTTP conventions:** filesystem routes and named hooks describe requests, validation, identity and responses.
 
 Today the framework provides an HTTP runtime, module import checks, web integration
-patterns, a common execution lifecycle and development/build tooling. The target
-extends this architecture to durable jobs, schedules, events and command runtimes.
+patterns, a common execution lifecycle, durable PostgreSQL jobs and development/build
+tooling. Schedules, general events and command runtimes are the next extensions.
 The [project vision](docs/vision.md) is the design brief;
 the [roadmap](docs/roadmap.md) records current enforcement gaps and delivery milestones.
 
@@ -129,3 +129,6 @@ See the [contributor guide](https://github.com/PaDreyer/boring-api/blob/master/C
 ## License
 
 [MIT](LICENSE)
+
+Durable jobs use the same facades and lifecycle, with an optional PostgreSQL adapter,
+explicit retries and idempotency. See the [job and worker reference](docs/jobs.md).

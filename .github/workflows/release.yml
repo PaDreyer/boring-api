@@ -16,6 +16,19 @@ jobs:
   package:
     name: Build and verify npm packages
     runs-on: ubuntu-22.04
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: boring_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      BORING_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/boring_test
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:

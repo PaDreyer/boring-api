@@ -2,13 +2,14 @@
 
 This is the structural contract for the shared application model. It applies to
 the selected API's sibling directories. The [lifecycle contract](lifecycle.md) defines
-configuration, ownership and execution; durable jobs remain a later milestone.
+configuration, ownership and execution; [durable jobs](jobs.md) share that model.
 
 | Role and files | Imports and exports | Calls and lifetime |
 | --- | --- | --- |
 | HTTP method files | Public schemas, Core, Zod, generated context types | Call injected public operations; one request |
 | Pipeline hooks | Public facades/schemas, Core, Zod, Node helpers | Authentication, middleware and response handling; one request |
 | Root `+config` | Public schemas, Zod, Core types; exports `schema` and `load(env)` | Data validation before setup; one immutable snapshot per app |
+| `jobs/<name>/job.ts` | Public schemas, Core, Zod, generated JobHandler; exports payload/version/policy/handler | One attempt; calls injected facades; setup owns queue binding |
 | `executions/**/*` | Public schemas, Core, Zod, generated types | Controlled callbacks through `application.execute`; one execution |
 | Root `+setup` | Public facades, schemas, port types, adapters and pages | Construct dependencies once per app; register `ctx.onClose`; expose approved operations and data |
 | `modules/<name>/facade.ts`, `facade/**/*.ts` | Own services, ports, schemas, facade parts; other public facades/schemas; Core and Zod | Public operations coordinate services, access and transactions; dependencies live for the app, execution context is the first argument |
@@ -45,6 +46,8 @@ Imperative `ctx.set` and `ctx.assign` obey the same exposure rules. Const aliase
 are traced; capability-erasing annotations/assertions (including service results)
 and mutable composition fail. This includes schema declarations and argument
 passing to data parameters, including generic constraints and rest parameters.
+Jobs also reject `Object`/`Reflect` mutation APIs, extracted methods and destructured
+aliases, preventing reflective replacement of injected facade operations.
 Conversions check individual fields, tuple slots, callback arguments/results and
 Promise results;
 an allowed port field does not exempt adjacent data fields from this check.

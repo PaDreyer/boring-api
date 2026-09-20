@@ -7,7 +7,7 @@ import { checkBoundaries } from "./boundaries";
 import { typeOnlyDependency } from "./type-dependencies";
 
 export interface ArchitectureDiagnostic {
-    code: "BORING101" | "BORING102" | "BORING103" | "BORING104" | "BORING105" | "BORING106" | "BORING107" | "BORING109" | "BORING110" | "BORING111" | "BORING112" | "BORING113" | "BORING114" | "BORING115";
+    code: "BORING101" | "BORING102" | "BORING103" | "BORING104" | "BORING105" | "BORING106" | "BORING107" | "BORING109" | "BORING110" | "BORING111" | "BORING112" | "BORING113" | "BORING114" | "BORING115" | "BORING116";
     file: ts.SourceFile;
     start: number;
     length: number;
@@ -15,7 +15,7 @@ export interface ArchitectureDiagnostic {
 }
 
 type Area = {
-    kind: "api" | "execution" | "module" | "infra" | "browser" | "pages" | "generated" | "client" | "framework" | "package" | "builtin" | "other";
+    kind: "api" | "job" | "execution" | "module" | "infra" | "browser" | "pages" | "generated" | "client" | "framework" | "package" | "builtin" | "other";
     module?: string;
     entry?: "facade" | "schemas";
     name?: string;
@@ -76,6 +76,7 @@ export function analyzeArchitecture(program: ts.Program, apiDirectory: string, g
         const target = canonical(file);
         if (clientEntries.has(target)) return { kind: "client" };
         if (inside(generated, target)) return { kind: "generated" };
+        if (inside(directories.jobs, target)) return { kind: "job" };
         if (inside(directories.executions, target)) return { kind: "execution" };
         if (inside(directories.api, target)) return { kind: "api" };
         if (inside(directories.infra, target)) return { kind: "infra" };
@@ -178,7 +179,7 @@ export function analyzeArchitecture(program: ts.Program, apiDirectory: string, g
     // Program. Parse those sources too, so CommonJS barrels cannot hide edges.
     for (const edges of dependencies.values()) {
         for (const edge of edges) {
-            if (!edge.target || !["api", "execution", "module", "infra", "browser", "pages", "other"].includes(edge.area.kind)) continue;
+            if (!edge.target || !["api", "job", "execution", "module", "infra", "browser", "pages", "other"].includes(edge.area.kind)) continue;
             if (dependencies.has(edge.target)) continue;
             let source = sources.get(edge.target);
             if (!source) {
@@ -215,14 +216,21 @@ export function analyzeArchitecture(program: ts.Program, apiDirectory: string, g
             const framework = to.kind === "framework" || (to.kind === "package" && to.name === "@boringapi/core");
             const tooling = to.kind === "package" && toolingPackages.has(to.name!);
             const zod = to.kind === "package" && to.name === "zod";
-            const endpoint = fromRole.role === "endpoint" || fromRole.role === "execution";
+            const endpoint = fromRole.role === "endpoint" || fromRole.role === "execution" || fromRole.role === "job";
             const setup = fromRole.role === "setup";
 
-            if ((from.kind === "api" || from.kind === "execution") && to.kind === "generated" && edge.typeOnly) {
+            if ((from.kind === "api" || from.kind === "execution" || from.kind === "job") && to.kind === "generated" && edge.typeOnly) {
                 continue;
+            } else if (fromRole.role === "job" && framework && !edge.typeOnly) {
+                const declaration = edge.node.parent;
+                const bindings = ts.isImportDeclaration(declaration) && declaration.importClause?.namedBindings;
+                if (!bindings || !ts.isNamedImports(bindings) || declaration.importClause?.name ||
+                    bindings.elements.some(entry => !entry.isTypeOnly && !["ApplicationError", "JobError", "requirePermissions"].includes((entry.propertyName ?? entry.name).text))) {
+                    fail("BORING116", "Jobs import Core types or named ApplicationError, JobError and requirePermissions only. Application construction, execution admission and job binding belong to bootstrap/setup; namespace, CommonJS and lazy Core runtime imports are unsupported in jobs.");
+                }
             } else if (!edge.typeOnly && to.kind === "builtin" && to.name === "module") {
                 fail("BORING106", "Custom module loaders cannot be checked. Use explicit imports instead of node:module/createRequire.");
-            } else if (to.kind === "execution") {
+            } else if ((to.kind === "execution" || to.kind === "job")) {
                 fail("BORING104", "Controlled execution entries are called by bootstrap, not imported by application roles.");
             } else if (fromRole.role === "config" && !(zod || framework && edge.typeOnly || toRole?.role === "schemas" && toRole.public)) {
                 fail("BORING115", "Configuration imports only Zod, public schemas and Core types. Read the supplied environment; construct dependencies in setup.");

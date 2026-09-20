@@ -11,7 +11,9 @@
     "start": "node dist/server.js",
     "test": "node --test -r ts-node/register -r ./test/register.ts test/*.test.ts",
     "web": "vite --config web/vite.config.mjs",
-    "migrate": "ts-node -r ./register-source.ts migrate.ts"
+    "migrate": "ts-node -r ./register-source.ts migrate.ts",
+    "worker": "node dist/boring-worker.cjs",
+    "dev:worker": "boring dev --worker"
   },
   "dependencies": {
     "@boringapi/core": "workspace:^",
@@ -19,7 +21,8 @@
     "express": "^4.18.2",
     "pg": "^8.23.0",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "@boringapi/jobs-postgres": "workspace:^"
   },
   "devDependencies": {
     "@types/node": "^18.11.17",

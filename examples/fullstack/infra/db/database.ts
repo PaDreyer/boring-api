@@ -4,6 +4,7 @@ import { Pool } from "pg";
 import type { PoolClient, PoolConfig } from "pg";
 import type { OrderDatabase, OrderStore } from "$modules/orders/ports/storage";
 import { order } from "$modules/orders/schemas";
+import { createPostgresJobs } from "@boringapi/jobs-postgres";
 import { migrations } from "./migrations";
 
 export function createDatabase(config: PoolConfig) {
@@ -36,6 +37,12 @@ export function createDatabase(config: PoolConfig) {
         transaction: (execution, operation) => transaction(async client => {
             const store: OrderStore = {
                 newId: randomUUID,
+                async reserve(requestId) {
+                    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1::uuid::text, 0))", [requestId]);
+                    const result = await client.query("SELECT o.id, o.item, o.quantity FROM order_requests r JOIN orders o ON o.id = r.order_id WHERE r.request_id = $1", [requestId]);
+                    return result.rows[0] ? order.parse(result.rows[0]) : undefined;
+                },
+                async remember(requestId, value) { await client.query("INSERT INTO order_requests (request_id, order_id) VALUES ($1, $2)", [requestId, value.id]); },
                 async insert(value) { await client.query("INSERT INTO orders (id, item, quantity) VALUES ($1, $2, $3)", [value.id, value.item, value.quantity]); },
                 async recordCreation(value, actorId) { await client.query("INSERT INTO order_events (order_id, actor_id) VALUES ($1, $2)", [value.id, actorId]); },
                 async find(id) {
@@ -49,6 +56,7 @@ export function createDatabase(config: PoolConfig) {
 
     return {
         orders: database,
+        jobs: createPostgresJobs(pool),
         close: () => pool.end(),
         async migrate(): Promise<void> {
             await transaction(async client => {

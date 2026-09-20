@@ -9,11 +9,12 @@ only its own compiled implementation; cross-package imports use public exports.
 | Package | Responsibility | Public entry points |
 | --- | --- | --- |
 | `@boringapi/core` | Application/execution lifecycle, HTTP runtime, browser transport and shared filesystem conventions | Root runtime API; `/client`; `/conventions`; `/agent-guide` |
+| `@boringapi/jobs-postgres` | Optional compiler-free durable queue; borrows the application PostgreSQL pool | `createPostgresJobs`, `jobMigration`, `JobRecord` |
 | `@boringapi/compiler` | TypeScript configuration, alias resolution, import transforms and symbol analysis | Root compiler utilities; `/register` for `registerTypeScript` |
 | `@boringapi/typegen` | Route and hook types, standalone browser contracts | `generateTypes`, `generateClientContracts`, `TypegenResult` |
 | `@boringapi/analyzer` | Static project analysis, architecture checks and inspection | `analyzeProject`, `synchronizeProject`, `checkArchitecture`, `inspectProject` and diagnostic/catalog formatting |
-| `@boringapi/build` | Portable application emission and locating compiled output | `buildProject`, `resolveStartDirectory`, `startProject` |
-| `@boringapi/scaffold` | Project, module and endpoint scaffolding | `initializeProject`, `addModule`, `addEndpoint` |
+| `@boringapi/build` | Portable application emission and locating compiled output | `buildProject`, `resolveStartDirectory`, `startProject`, `startWorker` |
+| `@boringapi/scaffold` | Project, module and endpoint scaffolding | `initializeProject`, `addModule`, `addEndpoint`, `addJob` |
 | `@boringapi/dev` | Source watching and isolated server workers | `startDevServer`, `DevServer` |
 | `@boringapi/cli` | Command arguments, result presentation and API dispatch | The `boring` executable; no library entry point |
 
@@ -29,7 +30,10 @@ Internal source files and compiled subpaths are not public APIs.
 Core exports `BoringApi`, the `Application` owner type, `ApplicationOptions`,
 `ExecutionContext`, `ExecutionIdentity`, `ExecutionScope`, `ExecutionOptions`,
 `ApplicationError`, `ExecutionError`, `LifecycleError` and `ShutdownTimeoutError`.
-See [lifecycle and migration](lifecycle.md) for construction, controlled execution
+Job runtime types include `JobContext`, `JobAdapter`, `JobPort`, `JobReceipt`,
+`JobPolicy`, `JobClaim` and `WorkerOptions`; `JobError` describes permanent delivery
+failures. Application adds `runJob()` and `work()`, setup adds `jobs()`.
+See [durable jobs](jobs.md) and [lifecycle and migration](lifecycle.md) for construction, controlled execution
 and disposal. These exports require no compiler or development package.
 
 ## Releases and compatibility
@@ -77,8 +81,9 @@ dependency and import `registerTypeScript` from `@boringapi/compiler/register`.
 The compiler root entry does not register loaders. See the
 [source compiler workflow](cli.md#module-shortcuts-editor-support-and-builds).
 
-`startDevServer(root, apiDirectory, port?, projectFile?)` returns a `DevServer`
-with an idempotent asynchronous `close()` method. It owns its watcher and child
+`startDevServer(root, apiDirectory, port?, projectFile?, worker = false)` returns a `DevServer`
+with an idempotent asynchronous `close()` method. Set worker to true for jobs;
+source admission runs the shared mandatory checks before each start/restart. It owns its watcher and child
 processes; the caller owns process signal handling. On reload and close it sends
 SIGTERM, then SIGKILL after five seconds if the worker has not exited.
 The CLI wires SIGINT/SIGTERM to this lifecycle.

@@ -2,7 +2,7 @@
 
 Read the [shared Agent guide](../../docs/agent-guide.md) before changing this
 application. The repository [AGENTS.md](../../AGENTS.md) also applies. This is one
-consumer with one PostgreSQL database, React SPA and server-rendered order pages.
+consumer with one PostgreSQL database, React SPA, server-rendered order pages and a durable worker.
 The specifics below supplement the shared workflow.
 
 - Build all packages with `pnpm build`, then inspect with `pnpm example:fullstack:inspect` before adding functionality. Reuse `orders.create` and
@@ -29,6 +29,7 @@ The specifics below supplement the shared workflow.
   before disposing resources.
 - Permissions belong in both route declarations and business operations. The
   environment-controlled bearer-token provider is a demo, not production login.
+- Jobs in `jobs/orders/create/job.ts` reuse `orders.create`. Queued payloads require requestId; preserve the order/audit/idempotency transaction and explicit worker grants. Run migrations explicitly, then use separate HTTP and worker processes. See the shared job reference.
 - Run the fullstack check/build scripts and repository checks. Set
   `BORING_TEST_DATABASE_URL` to an isolated test database to include the real
   PostgreSQL test in `pnpm test`; it creates and removes its own random schema.

@@ -144,3 +144,21 @@ against a protocol test double, comparing authorization, commits, rollback and s
 across both entry paths. `test/fullstack.test.ts` additionally exercises real PostgreSQL
 when `BORING_TEST_DATABASE_URL` is set. Only type contracts live in `ports/storage.ts`;
 there is no separate repository implementation layer.
+
+## Durable order jobs
+
+Run the explicit migration command before deploying this version. It appends the
+order idempotency table and the PostgreSQL job migration to the existing history.
+Start HTTP with `pnpm start` and a separate worker with `pnpm worker` after build;
+`pnpm dev:worker` watches the source worker. Both read DATABASE_URL.
+
+POST `/orders/queued` with the same bearer authentication and `orders:create`
+permission as direct POST `/orders`, plus a UUID `requestId` in the body. The 202
+receipt identifies the durable job. The worker invokes the same `orders.create`.
+Repeating the requestId with identical data yields one order and one audit record;
+changing data under the same key fails. Queue receipts themselves are not deduplicated.
+
+The worker uses machine `order-worker`, explicitly granted `orders:create` by
+configuration. Set BORING_WORKER_PERMISSIONS to an empty string to demonstrate
+permission denial; stored jobs cannot add grants. Tenant ownership is not modeled
+by this reference. See [delivery, shutdown and limitations](../../docs/jobs.md).

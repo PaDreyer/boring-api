@@ -6,7 +6,7 @@ Route and hook types are inferred from the application’s own schemas and retur
 
 ## Generated types
 
-`boring dev`, `boring check`, `boring inspect`, `boring build`, and `boring sync` generate a virtual `$types` module under `.boring/types` for every directory containing routes or hooks, including hook-only directories. The generator does not evaluate application code or duplicate schemas. The generated route types reference the exports of the corresponding method file:
+`boring dev`, `boring check`, `boring inspect`, `boring build`, and `boring sync` generate a virtual `$types` module under `.boring/types` for every directory containing routes, hooks or a job declaration, including hook-only directories. Jobs receive `JobHandler` and `JobContext`; setup receives a schema-derived `JobInputs` map for named enqueue ports. See [jobs](jobs.md). The generator does not evaluate application code or duplicate schemas. The generated route types reference the exports of the corresponding method file:
 
 - `params`, `query`, and `body` are typed according to their Zod output.
 - The return value of `GetHandler` or `PostHandler` must match the input of the `output` schema.

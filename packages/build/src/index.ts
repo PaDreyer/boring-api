@@ -1,3 +1,3 @@
 export { buildProject } from "./build";
-export { resolveStartDirectory, startProject } from "./start";
+export { resolveStartDirectory, startProject, startWorker } from "./start";
 export type { StartOptions } from "./start";

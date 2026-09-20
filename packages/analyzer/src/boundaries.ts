@@ -19,6 +19,13 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
     const coreErrorSymbol = coreErrorExport && originalSymbol(checker, coreErrorExport);
     const applicationExport = coreSource && moduleExports(checker, coreSource).find(symbol => symbol.name === "Application");
     const applicationSymbol = applicationExport && originalSymbol(checker, applicationExport);
+    const jobContextExport = coreSource && moduleExports(checker, coreSource).find(symbol => symbol.name === "JobContext");
+    const jobContextSymbol = jobContextExport && originalSymbol(checker, jobContextExport);
+    function coreJobContext(type: ts.Type): boolean {
+        if (!jobContextSymbol || type.getSymbol() !== jobContextSymbol || type.isUnionOrIntersection()) return false;
+        const [payload, services] = checker.getTypeArguments(type as ts.TypeReference);
+        return !!payload && data(payload) && !!services && !(services.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.NonPrimitive));
+    }
     function coreExecutionType(type: ts.Type): boolean { return !!contextSymbol && type.getSymbol() === contextSymbol && !type.isUnionOrIntersection(); }
     function executionContext(type: ts.Type): boolean {
         if (!coreExecutionType(type)) return false;
@@ -76,6 +83,12 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
         diagnostics.push({ code, file: node.getSourceFile(), start: node.getStart(), length: node.getWidth(), message });
     const isFunction = (node: ts.Node): node is FunctionBody => ts.isFunctionDeclaration(node) ||
         ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node);
+
+    function reflectionApi(node: ts.Expression): boolean {
+        const symbol = checker.getTypeAtLocation(node).getSymbol();
+        return !!symbol && ["ObjectConstructor", "Reflect"].includes(symbol.name) &&
+            !!symbol.declarations?.some(declaration => program.isSourceFileDefaultLibrary(declaration.getSourceFile()));
+    }
 
     function unwrap(node: ts.Node): ts.Node {
         while (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) node = node.expression;
@@ -459,7 +472,7 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
     }
     for (const source of sources) {
         const owner = role(source);
-        if (!["facade", "page", "setup", "config", "execution", "service", "port", "schemas", "endpoint", "hook"].includes(owner.role)) continue;
+        if (!["facade", "page", "setup", "config", "execution", "job", "service", "port", "schemas", "endpoint", "hook"].includes(owner.role)) continue;
         if (owner.role === "config") {
             for (const symbol of moduleExports(checker, source)) {
                 if (isTypeOnlyExport(checker, symbol)) continue;
@@ -469,6 +482,39 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
                 if (symbol.name === "schema" && zodSchema(type) && output && data(checker.getTypeOfSymbolAtLocation(output, site))) continue;
                 if (symbol.name === "load" && isFunction(value(site)) && type.getCallSignatures().every(signature => data(signature.getReturnType()))) continue;
                 report(site, "BORING115", "Configuration exports only a data-producing Zod schema and load(env) returning data. Dependencies belong in setup.");
+            }
+        }
+        if (owner.role === "job") {
+            const exports = moduleExports(checker, source);
+            for (const name of ["payload", "version", "policy", "handler"]) if (!exports.some(symbol => symbol.name === name)) {
+                report(source, "BORING116", `Job declaration requires ${name}. Use jobs/<name>/job.ts with generated JobHandler.`);
+            }
+            for (const symbol of exports) {
+                const site = declarationOf(checker, symbol) ?? source;
+                const type = symbolType(checker, symbol, source);
+                if (symbol.name === "payload" && zodSchema(type)) {
+                    if (["_input", "_output"].every(key => {
+                        const property = type.getProperty(key);
+                        return property && data(checker.getTypeOfSymbolAtLocation(property, site));
+                    })) continue;
+                }
+                if (symbol.name === "version" || symbol.name === "policy") {
+                    // Literal policy values make retries/version discoverable without execution.
+                    const target = value(site);
+                    const number = (node: ts.Node, max: number) => ts.isNumericLiteral(unwrap(node)) &&
+                        Number.isInteger(Number(unwrap(node).getText())) && Number(unwrap(node).getText()) >= 1 && Number(unwrap(node).getText()) <= max;
+                    if (symbol.name === "version" && number(target, 2147483647)) continue;
+                    if (symbol.name === "policy" && ts.isObjectLiteralExpression(target) && target.properties.length === 3 &&
+                        ["maxAttempts", "retryDelayMs", "timeoutMs"].every(key => target.properties.some(property =>
+                            ts.isPropertyAssignment(property) && property.name.getText().replace(/["']/g, "") === key && number(value(property), key === "maxAttempts" ? 100 : 2147483647)))) continue;
+                }
+                if (symbol.name === "handler") {
+                    const fn = value(site);
+                    if (isFunction(fn) && fn.getSourceFile() === source && fn.parameters.length === 1 &&
+                        coreJobContext(checker.getTypeAtLocation(fn.parameters[0])) &&
+                        type.getCallSignatures().every(signature => data(signature.getReturnType()))) continue;
+                }
+                report(site, "BORING116", "Jobs export only a data-only payload schema, literal positive version/policy, and a local handler with generated JobContext. No registries or capabilities.");
             }
         }
         if (owner.role === "execution") {
@@ -529,6 +575,14 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
             }
         }
         function visit(node: ts.Node) {
+            if (owner.role === "job" && (ts.isIdentifier(node) || ts.isPropertyAccessExpression(node))) {
+                const symbol = checker.getSymbolAtLocation(node);
+                const declaration = symbol && declarationOf(checker, originalSymbol(checker, symbol));
+                if (declaration && declaration.getSourceFile().isDeclarationFile && /[\\/]core[\\/](?:index|lifecycle|setupContext)\.d\.ts$/.test(declaration.getSourceFile().fileName) &&
+                    (ts.isClassDeclaration(declaration) || ts.isMethodDeclaration(declaration) || ts.isConstructorDeclaration(declaration))) {
+                    report(node, "BORING116", "Job entries receive their context and injected facades. Application construction, execution admission and job binding belong to bootstrap/setup, not jobs.");
+                }
+            }
             if ((owner.role === "service" || owner.role === "schemas") && isFunction(node) && node.body) {
                 const output = checker.getSignatureFromDeclaration(node)?.getReturnType();
                 if (output) {
@@ -542,7 +596,7 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
             if (ts.isVariableDeclaration(node) && node.initializer && !ts.isIdentifier(node.name)) setterPattern(node.name, checker.getTypeAtLocation(node.initializer));
             if (ts.isParameter(node) && !ts.isIdentifier(node.name)) setterPattern(node.name, checker.getTypeAtLocation(node));
             if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) setterPattern(unwrap(node.left), checker.getTypeAtLocation(node.right));
-            if (["facade", "page", "setup"].includes(owner.role) && ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+            if (["facade", "page", "setup", "job"].includes(owner.role) && ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
                 let root: ts.Expression = node.left;
                 while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root)) root = root.expression;
                 if (ts.isIdentifier(root) && ["module", "exports"].includes(root.text)) {
@@ -553,10 +607,10 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
                     }
                 }
             }
-            if (["facade", "page", "setup"].includes(owner.role) && ts.isExportAssignment(node)) {
+            if (["facade", "page", "setup", "job"].includes(owner.role) && ts.isExportAssignment(node)) {
                 report(node, "BORING112", "Public boundaries use named ES exports, not export assignments or default exports.");
             }
-            if (["facade", "page", "setup", "config", "execution", "service", "schemas"].includes(owner.role) && ts.isVariableDeclaration(node) && node.initializer && node.type) {
+            if (["facade", "page", "setup", "config", "execution", "job", "service", "schemas"].includes(owner.role) && ts.isVariableDeclaration(node) && node.initializer && node.type) {
                 checkConversion(node, checker.getTypeAtLocation(unwrap(node.initializer)), checker.getTypeAtLocation(node));
             }
             if (["facade", "page"].includes(owner.role) && ts.isReturnStatement(node) && node.expression &&
@@ -567,7 +621,7 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
                 !checked.has(node) && !data(checker.getTypeAtLocation(value(node.body)))) {
                 report(node, "BORING112", "Helpers cannot return hidden capabilities. Return data or expose explicit facade-owned operations.");
             }
-            if (["facade", "page", "setup", "config", "execution", "service", "schemas"].includes(owner.role) && ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+            if (["facade", "page", "setup", "config", "execution", "job", "service", "schemas"].includes(owner.role) && ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
                 checkConversion(node, checker.getTypeAtLocation(unwrap(node.right)), checker.getTypeAtLocation(node.left));
             }
             if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node))) {
@@ -586,17 +640,17 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
                 node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
                 (ts.isPropertyAccessExpression(node.left) || ts.isElementAccessExpression(node.left)) &&
                 (["facade", "page", "setup"].includes(owner.role) && !data(checker.getTypeAtLocation(node.left.expression)) ||
-                    ["endpoint", "hook", "execution"].includes(owner.role) && (publicCapability(checker.getTypeAtLocation(node.left.expression)) || servicesAccess(node.left.expression)))) {
+                    ["endpoint", "hook", "execution", "job"].includes(owner.role) && (publicCapability(checker.getTypeAtLocation(node.left.expression)) || servicesAccess(node.left.expression)))) {
                 report(node, "BORING113", "Do not mutate capability objects or their exports. Compose explicit facade operations in setup.");
             }
-            if (["facade", "page", "setup"].includes(owner.role) && (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
-                ts.isIdentifier(node.expression) && ["Object", "Reflect"].includes(node.expression.text) &&
+            if (["facade", "page", "setup", "job"].includes(owner.role) && (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
+                reflectionApi(node.expression) &&
                 ["assign", "defineProperty", "defineProperties", "setPrototypeOf", "set"].includes(ts.isPropertyAccessExpression(node) ? node.name.text :
                     ts.isStringLiteralLike(node.argumentExpression) ? node.argumentExpression.text : "set")) {
                 report(node, "BORING113", "Dynamic capability composition is unsupported. Use explicit operation objects and setup properties.");
             }
-            if (["facade", "page", "setup"].includes(owner.role) && ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name) &&
-                node.initializer && ts.isIdentifier(node.initializer) && ["Object", "Reflect"].includes(node.initializer.text)) {
+            if (["facade", "page", "setup", "job"].includes(owner.role) && ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name) &&
+                node.initializer && reflectionApi(node.initializer)) {
                 report(node, "BORING113", "Do not destructure reflection APIs at application boundaries. Use explicit operation objects.");
             }
             if (ts.isVariableDeclaration(node) && containsExecutionValue(checker.getTypeAtLocation(node))) {

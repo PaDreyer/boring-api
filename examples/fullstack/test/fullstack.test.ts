@@ -87,7 +87,7 @@ it("persists API and page results in PostgreSQL, rolls back failed business writ
     let owned: Awaited<ReturnType<BoringApi["createApp"]>> | undefined;
     try {
         await Promise.all([database.migrate(), database.migrate()]);
-        assert.equal((await inspect.query("SELECT count(*)::int AS count FROM boring_migrations")).rows[0].count, 3);
+        assert.equal((await inspect.query("SELECT count(*)::int AS count FROM boring_migrations")).rows[0].count, 4);
         const created = await execute(actor, ctx => orders.create(ctx, { item: "<script>alert(1)</script>", quantity: 2 }));
         const restarted = createDatabase({ connectionString: url });
         try { assert.deepEqual(await execute(actor, ctx => createOrders(restarted.orders).get(ctx, created.id)), created); }

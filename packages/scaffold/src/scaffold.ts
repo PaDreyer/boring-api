@@ -116,12 +116,12 @@ export function initializeProject(directory: string, apiDirectory = "api"): Scaf
     }
     const api = apiPath(root, apiDirectory);
     const apiName = slash(relative(root, api));
-    if (["modules", "infra", "web", "executions", "jobs"].includes(basename(api)) || inside(join(root, "dist"), api) || apiName === "test") {
+    if (["modules", "infra", "web", "executions", "jobs", "schedules", "events", "commands"].includes(basename(api)) || inside(join(root, "dist"), api) || apiName === "test") {
         throw new Error("Choose an API directory separate from modules, infra, web, executions, dist and the generated test directory.");
     }
     // An API tree may contain unrecognized files or a differently named route.
     // Initialization never adopts or modifies an existing application tree.
-    for (const folder of [api, ...["modules", "infra", "executions", "jobs"].map(name => join(dirname(api), name))]) {
+    for (const folder of [api, ...["modules", "infra", "executions", "jobs", "schedules", "events", "commands"].map(name => join(dirname(api), name))]) {
         safePath(root, folder);
         if (stat(folder)) throw new Error(`Application directory already exists: ${folder}. Use boring inspect and boring add.`);
     }
@@ -291,4 +291,48 @@ export function addJob(projectRoot: string, apiDirectory: string, name: string, 
     const files = writeChanges(root, [{ file: target, content }], () => { checked(root, api, projectFile, true); }, () => { analyzeProject(root, api, projectFile); });
     return { files, notes: [`Reused ${found.access} and ${payload}. Review idempotency and retry policy.`,
         `Bind the durable adapter with ctx.jobs in setup, configure explicit machine grants, and inject jobs.for(${JSON.stringify(name)}) through the owning module's port. No permissions were generated.`] };
+}
+
+export interface TriggerGeneratorOptions {
+    readonly from: string;
+    readonly payload: string;
+    readonly output?: string;
+    readonly input?: import("@boringapi/core").JsonValue;
+    readonly timing?: import("@boringapi/core").ScheduleTiming;
+    readonly event?: { readonly type: string; readonly version: number };
+}
+/** One source-derived generator, using the same checked convention as runtime. */
+export function addTrigger(projectRoot: string, apiDirectory: string, kind: "schedule" | "event" | "command", name: string, options: TriggerGeneratorOptions, projectFile?: string): ScaffoldResult {
+    safePath(resolve(projectRoot), resolve(projectRoot));
+    const root = realpathSync(projectRoot), api = apiPath(root, apiDirectory);
+    if (!["schedule", "event", "command"].includes(kind) || !name.split("/").every(part => /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(part))) throw new Error("Choose a named schedule, event consumer or command");
+    const catalog = inspectProject(checked(root, api, projectFile));
+    const access = options.from.startsWith("ctx.services.") ? options.from : `ctx.services.${options.from}`;
+    const operation = catalog.services.flatMap(service => service.operations).find(entry => entry.access === access);
+    if (!operation?.signatures.some(signature => signature.parameters.length === 2 && signature.parameters[0].type.includes("ExecutionContext"))) throw new Error("Choose an existing (execution, input) facade operation from boring inspect");
+    const schemaImport = (schema: string, alias: string) => {
+        const match = /^([a-z][a-z0-9-]*)\.([A-Za-z_$][\w$]*)$/.exec(schema);
+        if (!match || !catalog.modules.find(module => module.name === match[1])?.schemas?.exports.some(entry => entry.name === match[2] && entry.kind === "schema")) throw new Error(`Choose an existing public schema: ${schema}`);
+        return `import { ${match[2]} as ${alias} } from "$modules/${match[1]}/schemas";`;
+    };
+    const title = kind[0].toUpperCase() + kind.slice(1);
+    const lines = [schemaImport(options.payload, "contract"), `import type { ${title}Handler } from "./$types";`];
+    if (kind === "command") {
+        if (!options.output) throw new Error("Command generation requires an existing output schema");
+        lines.push(schemaImport(options.output, "result"), "export const input = contract;", "export const output = result;", "export const timeoutMs = 30000;",
+            `export const handler: CommandHandler = ctx => ${access}(ctx.execution, ctx.input);`);
+    } else {
+        lines.push("export const payload = contract;", "export const version = 1;", "export const policy = { maxAttempts: 3, retryDelayMs: 1000, timeoutMs: 30000 } as const;");
+        if (kind === "schedule") {
+            if (options.input === undefined || !options.timing) throw new Error("Schedules require explicit JSON input and timing; no business input is invented");
+            lines.push('import type { z } from "zod";', `export const input: z.input<typeof payload> = ${JSON.stringify(options.input)};`, `export const timing = ${JSON.stringify(options.timing)} as const;`);
+        } else {
+            if (!options.event) throw new Error("Event generation requires an explicit event type and version");
+            lines.push(`export const event = ${JSON.stringify(options.event)} as const;`);
+        }
+        lines.push(`export const handler: ${title}Handler = async ctx => { await ${access}(ctx.execution, ctx.payload); };`);
+    }
+    const target = join(dirname(api), `${kind}s`, name, `${kind}.ts`);
+    const files = writeChanges(root, [{ file: target, content: lines.join("\n") + "\n" }], () => { checked(root, api, projectFile, true); }, () => { analyzeProject(root, api, projectFile); });
+    return { files, notes: [`Reused ${access} and ${options.payload}. Configure ctx.${kind}s in setup with explicit trusted machine grants. Review idempotency and trigger policy. No permissions were generated.`] };
 }

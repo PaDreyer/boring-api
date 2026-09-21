@@ -3,7 +3,11 @@ import { scanApi, SourceScope } from "./conventions";
 import type { RouteModule } from "./types";
 import { JobDeclaration, validateJobDeclaration } from "./jobs";
 
-export interface Discovery {
+import { TriggerDeclarations, validateTriggerDeclaration } from "./triggers";
+import { jobJson } from "./jobs";
+import { snapshot } from "./execution";
+
+export interface Discovery extends TriggerDeclarations {
     routes: Route[];
     jobs: Map<string, JobDeclaration>;
     config?: ConfigModule;
@@ -56,6 +60,14 @@ export function discover(apiDirectory: string): Discovery {
         validateJobDeclaration(source.name, declaration);
         jobs.set(source.name, Object.freeze({ ...declaration, policy: Object.freeze({ ...declaration.policy }) }));
     }
+    const triggers = { schedules: new Map(), events: new Map(), commands: new Map() };
+    for (const kind of ["schedule", "event", "command"] as const) for (const source of sources[`${kind}s`]) {
+        const declaration = load(source.file);
+        validateTriggerDeclaration(kind, source.name, declaration);
+        const copy = { ...declaration };
+        for (const key of kind === "schedule" ? ["input", "timing", "policy"] : kind === "event" ? ["event", "policy"] : []) copy[key] = snapshot(jobJson(copy[key]));
+        triggers[`${kind}s`].set(source.name, Object.freeze(copy));
+    }
     for (const contract of sources.contracts) {
         const file = contract.file;
         if (contract.kind === "route") routes.set(file, routeModule(file));
@@ -89,7 +101,7 @@ export function discover(apiDirectory: string): Discovery {
         })),
     });
     return {
-        config, setup, auth, jobs, rootScope: scope(sources.rootScope),
+        config, setup, auth, jobs, ...triggers, rootScope: scope(sources.rootScope),
         routes: sources.routes.map(route => ({ method: route.method, path: route.path,
             source: route.file, module: routes.get(route.file)!, scope: scope(route.scope) })),
     };

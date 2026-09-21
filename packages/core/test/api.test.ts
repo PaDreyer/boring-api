@@ -140,13 +140,26 @@ it("rejects ambiguous dynamic routes at startup", async () => {
 
 it("rejects routes that differ only by case", async () => {
     const root = mkdtempSync(join(tmpdir(), "boring-api-case-"));
+    const fs = require("node:fs");
+    const read = fs.readdirSync;
     try {
-        for (const name of ["Foo", "foo"]) {
-            mkdirSync(join(root, name));
-            writeFileSync(join(root, name, "get.js"), "exports.handler = () => ({ ok: true });\n");
+        mkdirSync(join(root, "Foo"));
+        writeFileSync(join(root, "Foo/get.js"), "exports.handler = () => ({ ok: true });\n");
+        try {
+            mkdirSync(join(root, "foo"));
+            writeFileSync(join(root, "foo/get.js"), "exports.handler = () => ({ ok: true });\n");
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+            // Case-insensitive volumes cannot represent this invalid tree. Supply
+            // its second directory entry while both spellings resolve to the fixture.
+            fs.readdirSync = (path: string, options: unknown) => {
+                const entries = read(path, options);
+                return path === root ? [...entries, { name: "foo", isDirectory: () => true, isFile: () => false }] : entries;
+            };
         }
         await assert.rejects(() => new BoringApi().createApp(root), /Duplicate route/);
     } finally {
+        fs.readdirSync = read;
         rmSync(root, { recursive: true, force: true });
     }
 });

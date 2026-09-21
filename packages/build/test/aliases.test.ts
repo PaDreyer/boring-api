@@ -103,6 +103,75 @@ it("gates inspection and builds on the same setup exposure diagnostics", () => {
     }
 });
 
+it("blocks audited command mutation and retention patterns before emitting a build", () => {
+    const root = fixture();
+    const cases: [string, string][] = [
+        ['function replace(orders:{read:(id:string)=>{id:string,label:string}}){[orders.read]=[id=>({id,label:"changed"})];} replace(ctx.services.orders);', "BORING113"],
+        ['[saved]=[()=>ctx.execution.signal.aborted];', "BORING115"],
+        ['({callback:saved}={callback:()=>ctx.execution.signal.aborted});', "BORING115"],
+        ['saved=read.bind(null,ctx);', "BORING115"],
+        ['const {signal}=ctx.execution; saved=()=>signal.aborted;', "BORING115"],
+        ['function capture(...callbacks:Array<()=>boolean>){saved=callbacks[0];} capture(()=>ctx.execution.signal.aborted);', "BORING115"],
+        ['function capture(callback=()=>ctx.execution.signal.aborted){saved=callback;} capture();', "BORING115"],
+        ['const callbacks=[()=>ctx.execution.signal.aborted]; saved=callbacks.pop()!;', "BORING115"],
+        ['const callbacks=[read.bind(null,ctx)]; saved=callbacks.shift()!;', "BORING115"],
+        ['const callbacks=[()=>ctx.execution.signal.aborted]; saved=callbacks.slice()[0];', "BORING115"],
+        ['function capture(callback:()=>boolean):void;function capture(callback:()=>boolean){saved=callback;}capture(()=>ctx.execution.signal.aborted);', "BORING115"],
+        ['shared.reverse().push(()=>ctx.execution.signal.aborted);', "BORING115"],
+        ['const callbacks=shared.sort();callbacks.push(()=>ctx.execution.signal.aborted);', "BORING115"],
+        ['const callbacks:Array<()=>boolean>=[];const alias=callbacks.reverse();alias.push(()=>ctx.execution.signal.aborted);saved=callbacks[0];', "BORING115"],
+        ['const callbacks=[()=>false,()=>ctx.execution.signal.aborted];callbacks.reverse();saved=callbacks[0];', "BORING115"],
+        ['const callbacks=[()=>false,()=>ctx.execution.signal.aborted];callbacks.sort(()=>-1);saved=callbacks[0];', "BORING115"],
+        ['const callbacks=[()=>false,()=>ctx.execution.signal.aborted];callbacks.copyWithin(0,1);saved=callbacks[0];', "BORING115"],
+        ['const callbacks=[()=>false,()=>ctx.execution.signal.aborted];callbacks.shift();saved=callbacks[0];', "BORING115"],
+        ['let capture:(callback:()=>boolean)=>void=actual=>{saved=actual;};capture(()=>ctx.execution.signal.aborted);', "BORING115"],
+        ['let capture:(callback:()=>boolean)=>void=()=>{};capture=actual=>{saved=actual;};capture(()=>ctx.execution.signal.aborted);', "BORING115"],
+        ['function capture(actual:()=>boolean){saved=actual;}capture.call(undefined,()=>ctx.execution.signal.aborted);', "BORING115"],
+        ['function capture(actual:()=>boolean){saved=actual;}capture.apply(undefined,[()=>ctx.execution.signal.aborted]);', "BORING115"],
+        ['const callbacks:Array<()=>boolean>=[];const nested=[callbacks];const copy=nested.slice();copy[0].push(()=>ctx.execution.signal.aborted);saved=callbacks[0];', "BORING115"],
+        ['const captures:Array<(cb:()=>boolean)=>void>=[];captures.push(cb=>{saved=cb;});captures[0](()=>ctx.execution.signal.aborted);', "BORING115"],
+        ['const captures:Array<(cb:()=>boolean)=>void>=[cb=>{saved=cb;}];captures.slice()[0](()=>ctx.execution.signal.aborted);', "BORING115"],
+        ['const captures:Array<(cb:()=>boolean)=>void>=[cb=>{},cb=>{saved=cb;}];captures.reverse();captures[0](()=>ctx.execution.signal.aborted);', "BORING115"],
+        ['const callbacks=[0].map(()=>()=>ctx.execution.signal.aborted);saved=callbacks[0];', "BORING115"],
+        ['const callbacks=Array.from([0],()=>()=>ctx.execution.signal.aborted);saved=callbacks[0];', "BORING115"],
+        ['const callbacks=[0].flatMap(()=>[()=>ctx.execution.signal.aborted]);saved=callbacks[0];', "BORING115"],
+        ['const captures=[0].map(()=>(cb:()=>boolean)=>{saved=cb;});captures[0](()=>ctx.execution.signal.aborted);', "BORING115"],
+        ['const callbacks=[0].map.call([0],()=>()=>ctx.execution.signal.aborted);saved=callbacks[0] as ()=>boolean;', "BORING115"],
+        ['const callbacks=[0].map.apply([0],[()=>()=>ctx.execution.signal.aborted]);saved=callbacks[0] as ()=>boolean;', "BORING115"],
+        ['const args:[(value:number)=>()=>boolean]=[()=>()=>ctx.execution.signal.aborted];const callbacks=[0].map.apply([0],args);saved=callbacks[0] as ()=>boolean;', "BORING115"],
+        ['function makeArgs():[(value:number)=>()=>boolean]{return [()=>()=>ctx.execution.signal.aborted];}const callbacks=[0].map.apply([0],makeArgs());saved=callbacks[0] as ()=>boolean;', "BORING115"],
+        ['const aborted=ctx.execution.signal.aborted;function makeArgs():[(value:number)=>()=>boolean]{return [()=>()=>aborted];}const callbacks=[0].map.apply([0],makeArgs());saved=callbacks[0] as ()=>boolean;', "BORING115"],
+        ['const args:[(value:number)=>()=>boolean]=[()=>()=>false];const callbacks=[0].map(...args);saved=callbacks[0] as ()=>boolean;', "BORING115"],
+        ['function makeArgs():[number[],(value:unknown)=>unknown]{return [[0],value=>value];}Array.from.apply(Array,makeArgs());', "BORING115"],
+        ['const mapper=[0].map.bind([0]);const callbacks=mapper(()=>()=>ctx.execution.signal.aborted);saved=callbacks[0] as ()=>boolean;', "BORING115"],
+        ['const callbacks=Array.from.call(Array,[0],()=>()=>ctx.execution.signal.aborted);saved=callbacks[0] as ()=>boolean;', "BORING115"],
+        ['const carrier={callback:()=>ctx.execution.signal.aborted};const callbacks=[0].map(function(this:typeof carrier){return this.callback;},carrier);saved=callbacks[0];', "BORING115"],
+        ['const carrier={callback:()=>ctx.execution.signal.aborted};const callbacks=Array.from([0],function(this:typeof carrier){return this.callback;},carrier);saved=callbacks[0];', "BORING115"],
+        ['const capture=(cb:()=>boolean)=>{saved=cb;};const bound=capture.bind(undefined);[()=>ctx.execution.signal.aborted].forEach(bound);', "BORING115"],
+        ['const capture=(_label:string,cb:()=>boolean)=>{saved=cb;};const bound=capture.bind(undefined,"retained");[()=>ctx.execution.signal.aborted].forEach(bound);', "BORING115"],
+    ];
+    for (const [operation, code] of cases) {
+        write(root, "app/commands/audit/command.ts", `import {z} from "zod";
+import type {CommandHandler,CommandContext} from "./$types";
+export const input=z.object({}); export const output=z.boolean(); export const timeoutMs=1000;
+const shared:Array<()=>boolean>=[]; let saved:()=>boolean=()=>false; function read(ctx:CommandContext){return ctx.execution.signal.aborted;}
+export const handler:CommandHandler=ctx=>{${operation} return false;};`);
+        const project = analyzeProject(root, "app/http");
+        assert.equal(project.diagnostics.length, 0, ts.formatDiagnostics(project.diagnostics, formatHost(root)));
+        assert.ok(project.architecture.some(error => error.code === code), operation);
+        if (operation.includes("makeArgs") || operation.includes("map(...args)")) {
+            const diagnostic = project.architecture.find(error => error.code === "BORING115" &&
+                error.message.includes("dynamic apply or spread"));
+            assert.ok(diagnostic, operation);
+            assert.ok(diagnostic.start > 0 && diagnostic.length > 0);
+        }
+        assert.throws(() => inspectProject(project), /check errors/);
+        assert.throws(() => buildProject(project), /check errors/);
+        assert.equal(existsSync(join(root, "output")), false);
+        assert.equal(existsSync(join(root, ".boring/build.json")), false);
+    }
+});
+
 it("checks and inspects aliases, including unused modules, without executing source", () => {
     const root = fixture();
     write(root, "app/modules/unused/facade.ts", 'throw new Error("must not execute"); export const run = () => "ok";');

@@ -1,4 +1,4 @@
-import { jobMigration } from "@boringapi/jobs-postgres";
+import { jobMigration, triggerMigration } from "@boringapi/jobs-postgres";
 /** The database schema has one owner. Append migrations; never edit applied SQL. */
 export const migrations = [{
     name: "001_orders",
@@ -17,4 +17,4 @@ export const migrations = [{
 }, {
     name: "002_order_requests",
     sql: `CREATE TABLE order_requests (request_id uuid PRIMARY KEY, order_id uuid NOT NULL REFERENCES orders(id));`,
-}, jobMigration] as const;
+}, jobMigration, triggerMigration] as const;

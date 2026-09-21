@@ -162,3 +162,22 @@ The worker uses machine `order-worker`, explicitly granted `orders:create` by
 configuration. Set BORING_WORKER_PERMISSIONS to an empty string to demonstrate
 permission denial; stored jobs cannot add grants. Tenant ownership is not modeled
 by this reference. See [delivery, shutdown and limitations](../../docs/jobs.md).
+
+## Schedules, events and commands
+
+After explicit migrations, set `BORING_SCHEDULE_PERMISSIONS=orders:create`,
+`BORING_EVENT_PERMISSIONS=orders:create` and `BORING_COMMAND_PERMISSIONS=orders:create`
+for the appropriate process. These grants default to empty. All entries call the
+same `orders.create` facade and order/audit/idempotency transaction.
+
+Run `node dist/boring-scheduler.cjs` and `node dist/boring-schedule-worker.cjs` in
+separate processes for the UTC hourly reference schedule. Its latest missed
+occurrence is admitted; queued/running work suppresses overlap. An occurrence's
+stable UUID becomes requestId. Run `node dist/boring-consumer.cjs` for events.
+Trusted ingress uses `application.acceptEvent` with type `orders.create-requested`,
+version 1, a stable event UUID and a queued-order payload containing requestId.
+
+`node dist/boring-command.cjs orders/create '{"item":"Manual order","quantity":1,"requestId":"<UUID>"}'`
+runs once, without HTTP. For source use `boring command orders/create --source
+--input '<JSON>'`. Reusing requestId repeats one intent; a new ID creates a new
+intent. See the complete [trigger guarantees and migration](../../docs/triggers.md).

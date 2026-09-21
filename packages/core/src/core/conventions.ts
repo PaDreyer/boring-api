@@ -32,6 +32,9 @@ export interface ContractSource {
 export interface ApiSources {
     routes: RouteSource[];
     jobs: JobSource[];
+    schedules: JobSource[];
+    events: JobSource[];
+    commands: JobSource[];
     contracts: ContractSource[];
     config?: string;
     setup?: string;
@@ -43,8 +46,8 @@ export interface ApiSources {
 export interface JobSource { name: string; file: string; }
 
 /** One named entry per folder. No executable helper files or side registries. */
-export function scanJobs(apiDirectory: string): JobSource[] {
-    const root = join(dirname(resolve(apiDirectory)), "jobs");
+export function scanJobs(apiDirectory: string, kind: "job" | "schedule" | "event" | "command" = "job"): JobSource[] {
+    const root = join(dirname(resolve(apiDirectory)), `${kind}s`);
     if (!existsSync(root)) return [];
     const jobs: JobSource[] = [];
     function walk(directory: string, parts: string[]) {
@@ -56,7 +59,7 @@ export function scanJobs(apiDirectory: string): JobSource[] {
                 if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(entry.name)) throw new Error(`Invalid job directory: ${file}`);
                 walk(file, [...parts, entry.name]);
             } else if (/\.[cm]?[jt]sx?$/.test(entry.name) && !entry.name.endsWith(".d.ts")) {
-                if (!parts.length || !/^job\.[jt]s$/.test(entry.name) || found) throw new Error(`Expected one jobs/<name>/job.ts or job.js declaration: ${file}`);
+                if (!parts.length || !new RegExp(`^${kind}\\.[jt]s$`).test(entry.name) || found) throw new Error(`Expected one ${kind}s/<name>/${kind}.ts or ${kind}.js declaration: ${file}`);
                 found = true;
                 jobs.push({ name: parts.join("/"), file });
             }
@@ -114,7 +117,7 @@ export function scanApi(apiDirectory: string): ApiSources {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error(`API directory does not exist: ${root}`);
         throw error;
     }
-    const tree: ApiSources = { routes: [], jobs: scanJobs(root), contracts: [], rootScope: { middleware: [], errors: [] }, scopes: new Map() };
+    const tree: ApiSources = { routes: [], jobs: scanJobs(root), schedules: scanJobs(root, "schedule"), events: scanJobs(root, "event"), commands: scanJobs(root, "command"), contracts: [], rootScope: { middleware: [], errors: [] }, scopes: new Map() };
     const seenRoutes = new Map<string, string>();
     function walk(directory: string, inherited: SourceScope, segments: string[]) {
         const entries = readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));

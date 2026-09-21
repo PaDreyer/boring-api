@@ -9,6 +9,9 @@ export function setup(ctx: SetupContext) {
     const database = createDatabase({ connectionString: ctx.config.databaseUrl });
     ctx.onClose("PostgreSQL", () => database.close());
     const jobs = ctx.jobs(database.jobs, { identity: { kind: "machine", id: "order-worker", permissions: ctx.config.workerPermissions } });
+    ctx.schedules(database.jobs, { identity: { kind: "machine", id: "order-scheduler", permissions: ctx.config.schedulePermissions } });
+    ctx.events(database.jobs, { identity: { kind: "machine", id: "order-consumer", permissions: ctx.config.eventPermissions } });
+    ctx.commands({ identity: { kind: "machine", id: "order-command", permissions: ctx.config.commandPermissions } });
     const orders = createOrders(database.orders, jobs.for("orders/create"));
     return { orders, access: createAccess(createIdentity(ctx.config.token)), pages: createPages(orders) };
 }

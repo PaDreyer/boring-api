@@ -33,7 +33,7 @@ it("discovers typed job payloads, policies, facade reuse and role dependencies w
     const { p, text } = messages(root);
     assert.equal(p.diagnostics.length, 0, ts.formatDiagnostics(p.diagnostics, { getCanonicalFileName: x => x, getCurrentDirectory: () => root, getNewLine: () => "\n" }));
     assert.equal(text, "");
-    const catalog = inspectProject(p); assert.equal(catalog.schemaVersion, 4);
+    const catalog = inspectProject(p); assert.equal(catalog.schemaVersion, 5);
     assert.equal(catalog.jobs[0].name, "orders/create"); assert.deepEqual(catalog.jobs[0].operations, ["ctx.services.orders.create"]);
     assert.equal(catalog.jobs[0].version?.kind, "literal"); assert.equal(catalog.jobs[0].payload?.inputType.includes("value: string"), true);
     assert.ok(catalog.roles.some(source => source.role === "job"));

@@ -1,4 +1,6 @@
-import type { JobAdapter, JobClaim, JobFailure, StoredJob } from "@boringapi/core";
+import { postgresTriggers } from "./triggers";
+export { triggerMigration } from "./triggers";
+import type { TriggerAdapter, JobAdapter, JobClaim, JobFailure, StoredJob } from "@boringapi/core";
 
 /** The narrow pg-compatible capability we borrow; public declarations need no driver types. */
 export interface PostgresConnection {
@@ -58,12 +60,13 @@ const lockedClaim = `WITH locked AS MATERIALIZED (
 )`;
 
 /** Borrows an application-owned pool. SQL uses the pool's configured search_path. */
-export function createPostgresJobs(pool: PostgresPool): JobAdapter & {
+export function createPostgresJobs(pool: PostgresPool): TriggerAdapter & {
     get(id: string): Promise<JobRecord | undefined>;
     failed(limit?: number): Promise<JobRecord[]>;
     retry(id: string): Promise<boolean>;
 } {
     return {
+        ...postgresTriggers(pool),
         async enqueue(job) {
             // A dedicated transaction overrides asynchronous commit for the durable receipt.
             const client = await pool.connect();
@@ -80,16 +83,18 @@ export function createPostgresJobs(pool: PostgresPool): JobAdapter & {
                 throw error;
             } finally { client.release(discard); }
         },
-        async claim(leaseMs) {
+        async claim(leaseMs, kind = "job") {
+            const category = kind === "job" ? "name NOT LIKE '@%'" : kind === "event" ? "name LIKE '@event/%'" : kind === "schedule" ? "name LIKE '@schedule/%'" : undefined;
+            if (!category) throw new TypeError("Unknown delivery kind");
             // Expired last attempts remain searchable failures, including after a process crash.
             await pool.query(`WITH expired AS (
-                SELECT id FROM boring_jobs WHERE status = 'running' AND lease_until <= clock_timestamp()
+                SELECT id FROM boring_jobs WHERE ${category} AND status = 'running' AND lease_until <= clock_timestamp()
                     AND attempt >= max_attempts FOR UPDATE SKIP LOCKED
             ) UPDATE boring_jobs j SET status = 'failed', lease_token = NULL, lease_until = NULL,
                 finished_at = clock_timestamp(), last_error = '{"code":"attempts_exhausted","message":"Final attempt lease expired"}'::jsonb
                 FROM expired e WHERE j.id = e.id`);
             const result = await pool.query(`WITH next AS (
-                SELECT id FROM boring_jobs WHERE attempt < max_attempts AND
+                SELECT id FROM boring_jobs WHERE ${category} AND attempt < max_attempts AND
                     ((status = 'pending' AND available_at <= clock_timestamp()) OR (status = 'running' AND lease_until <= clock_timestamp()))
                 ORDER BY available_at, created_at, id FOR UPDATE SKIP LOCKED LIMIT 1
             ) UPDATE boring_jobs j SET status = 'running', attempt = attempt + 1,

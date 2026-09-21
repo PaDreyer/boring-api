@@ -328,3 +328,5 @@ to reuse an inspected facade. `boring dev --worker` checks and watches source jo
 `boring worker` starts compiled jobs without HTTP. Production uses the generated
 `node dist/boring-worker.cjs`. See [durable jobs](jobs.md) for configuration,
 migrations, grants, retries and shutdown.
+
+Schedules, event consumers and application commands use the complete [trigger contract](triggers.md), including setup grants, PostgreSQL migration, static checks, generation and separate compiled process startup.

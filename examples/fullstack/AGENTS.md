@@ -33,3 +33,5 @@ The specifics below supplement the shared workflow.
 - Run the fullstack check/build scripts and repository checks. Set
   `BORING_TEST_DATABASE_URL` to an isolated test database to include the real
   PostgreSQL test in `pnpm test`; it creates and removes its own random schema.
+
+- Schedules, events and commands also call `orders.create`. Preserve requestId from events/commands and use the stable occurrence ID for scheduled orders. Configure their environment grants explicitly; defaults deny. See `docs/triggers.md`.

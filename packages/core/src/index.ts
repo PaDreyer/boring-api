@@ -17,3 +17,7 @@ export type { Application, ApplicationOptions, ExecutionScope } from "./core/lif
 export { JobError } from "./core/jobs";
 export type { JsonValue, JobAdapter, JobBindings, JobClaim, JobContext, JobDeclaration, JobDelivery, JobFailure, JobOptions,
     JobOrigin, JobPolicy, JobPort, JobReceipt, StoredJob, WorkerOptions, JobAttemptResult } from "./core/jobs";
+
+export { commandFailure, TriggerError, scheduleDue, triggerId, validateScheduleTiming } from "./core/triggers";
+export type { DeliveryKind, ScheduleTiming, ScheduleOccurrence, ScheduleContext, ScheduleDeclaration, EventMetadata, EventContext, EventDeclaration,
+    CommandContext, CommandDeclaration, TriggerOptions, AcceptedEvent, EventReceipt, ScheduleRegistration, TriggerAdapter } from "./core/triggers";

@@ -15,7 +15,7 @@ It uses TypeScript, Express 4 and Zod 3.
 
 Today the framework provides an HTTP runtime, module import checks, web integration
 patterns, a common execution lifecycle, durable PostgreSQL jobs and development/build
-tooling. Schedules, general events and command runtimes are the next extensions.
+tooling, including schedules, durable event consumers and application commands.
 The [project vision](docs/vision.md) is the design brief;
 the [roadmap](docs/roadmap.md) records current enforcement gaps and delivery milestones.
 
@@ -107,6 +107,7 @@ All guides below are included in the npm package.
 - [CLI and deployment](docs/cli.md) — scaffolding, aliases, development and production.
 - [Routes, modules and permissions](docs/application.md) — application structure and checked boundaries.
 - [Application lifecycle](docs/lifecycle.md) — configuration, ownership, controlled execution, cancellation and migration.
+- [Durable jobs](docs/jobs.md) and [schedules, events and commands](docs/triggers.md) — shared facades, delivery rules and separate processes.
 - [Hooks and generated types](docs/reference.md) — context, validation and request lifecycle.
 - [Inspection catalog](docs/inspection.md) — discover existing code and consume the JSON format.
 - [Database and web applications](docs/web.md) — transactions, SPA/MPA reuse and the typed browser client.
@@ -129,6 +130,3 @@ See the [contributor guide](https://github.com/PaDreyer/boring-api/blob/master/C
 ## License
 
 [MIT](LICENSE)
-
-Durable jobs use the same facades and lifecycle, with an optional PostgreSQL adapter,
-explicit retries and idempotency. See the [job and worker reference](docs/jobs.md).

@@ -230,3 +230,65 @@ it("start validates build metadata instead of following malformed or escaping pa
     write(root, ".boring/build.json", '{"version":1,"outputDirectory":"../elsewhere"}');
     assert.throws(() => resolveStartDirectory(root, {}), /Invalid directory/);
 });
+
+it("runs schema-checked application commands through source and compiled CLI without argument grants", () => {
+    const root = fixture();
+    write(root, "api/+config.ts", 'import {z} from "zod"; export const schema=z.object({grants:z.array(z.string())}); export function load(env:Readonly<Record<string,string|undefined>>) {return {grants:env.TEST_COMMAND_GRANTS?.split(",")??[]};}');
+    write(root, "modules/health/facade.ts", 'import type {ExecutionContext} from "@boringapi/core"; import {requirePermissions} from "@boringapi/core"; export function health(ctx:ExecutionContext,input:{status:string}) {requirePermissions(ctx.identity?.permissions??[],"health:run");return input;}');
+    write(root, "api/+setup.ts", 'import {health} from "$modules/health/facade"; import type {SetupContext} from "./$types"; export function setup(ctx:SetupContext) {ctx.commands({identity:{kind:"machine",id:"cli",permissions:ctx.config.grants}});ctx.onClose("test",()=>console.error("disposed"));return {health};}');
+    write(root, "api/get.ts", 'import type {GetHandler} from "./$types"; export const handler:GetHandler=ctx=>ctx.services.health(ctx.execution,{status:"ok"});');
+    write(root, "commands/health/run/command.ts", 'import {z} from "zod"; import type {CommandHandler} from "./$types"; export const input=z.object({status:z.string()}).strict(); export const output=input; export const timeoutMs=1000; export const handler:CommandHandler=ctx=>ctx.services.health(ctx.execution,ctx.input);');
+    build(root);
+    for(const mode of [["--source"], ["--out-dir","dist"]]) {
+        const invoke=(args:string[],grants?:string)=>spawnSync(process.execPath,[cli,"command","health/run",...mode,...args],{cwd:root,encoding:"utf8",env:{...process.env,PORT:"not-an-http-process",TEST_COMMAND_GRANTS:grants},timeout:15000});
+        const ok=invoke(["--input",'{"status":"ok"}'],"health:run");assert.equal(ok.status,0,ok.stderr);assert.deepEqual(JSON.parse(ok.stdout),{status:"ok"});assert.match(ok.stderr,/disposed/);
+        const denied=invoke(["--input",'{"status":"ok"}']);assert.equal(denied.status,3,denied.stderr);assert.equal(denied.stdout,"");assert.match(denied.stderr,/forbidden/);
+        const spoof=invoke(["--input",'{"status":"ok"}',"--permissions","health:run"]);assert.equal(spoof.status,2);assert.equal(JSON.parse(spoof.stderr).error.code,"invalid_input");
+        const invalid=invoke(["--input","{}"]);assert.equal(invalid.status,2);assert.match(invalid.stderr,/invalid_input/);
+    }
+});
+
+async function interruptAt(root: string, args: string[], marker: string, failCleanup: boolean) {
+    const child = spawn(process.execPath, [cli, ...args], { cwd: root, stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, TEST_SLOW_SETUP: marker === "setup pending" ? "true" : "false", TEST_FAIL_CLEANUP: String(failCleanup) } });
+    let stdout = "", stderr = "", sent = false;
+    const completed = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", () => resolve()); });
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    child.stderr.on("data", chunk => {
+        stderr += chunk;
+        if (!sent && stderr.includes(marker)) { sent = true; child.kill("SIGTERM"); }
+    });
+    const force = setTimeout(() => child.kill("SIGKILL"), 15000);
+    try { await completed; } finally { clearTimeout(force); }
+    assert.ok(sent, stderr); assert.equal(child.signalCode, null, stderr);
+    assert.equal((stderr.match(/cleanup finished/g) ?? []).length, 1, stderr);
+    return { code: child.exitCode, stdout, stderr };
+}
+
+it("owns early CLI trigger shutdown and suppresses command success after cancellation during cleanup", async () => {
+    const root = fixture();
+    write(root, "api/+config.ts", 'import {z} from "zod"; export const schema=z.object({slow:z.boolean(),fail:z.boolean()}); export const load=(env:Readonly<Record<string,string|undefined>>)=>({slow:env.TEST_SLOW_SETUP==="true",fail:env.TEST_FAIL_CLEANUP==="true"});');
+    write(root, "api/+setup.ts", `import {health} from "$modules/health/facade"; import type {SetupContext} from "./$types";
+export async function setup(ctx:SetupContext) {
+    ctx.onClose("test",async()=>{console.error("cleanup pending"); await new Promise(resolve=>setTimeout(resolve,100)); console.error("cleanup finished"); if(ctx.config.fail) throw new Error("cleanup failed");});
+    ctx.commands({identity:{kind:"machine",id:"test",permissions:[]}});
+    if(ctx.config.slow){console.error("setup pending"); await new Promise(resolve=>setTimeout(resolve,100));}
+    return {health};
+}`);
+    write(root, "commands/health/command.ts", 'import {z} from "zod";import type {CommandHandler} from "./$types";export const input=z.object({});export const output=z.object({status:z.string()});export const timeoutMs=1000;export const handler:CommandHandler=ctx=>ctx.services.health();');
+    build(root);
+    for (const fail of [false, true]) {
+        for (const mode of ["scheduler", "schedule-worker", "consumer"]) {
+            const result = await interruptAt(root, [mode, "--out-dir", "dist"], "setup pending", fail);
+            assert.equal(result.code, fail ? 1 : 0, result.stderr);
+            assert.doesNotMatch(result.stderr, /Configure ctx\./, "No work starts after an early stop");
+        }
+        for (const target of [["--source"], ["--out-dir", "dist"]]) {
+            const result = await interruptAt(root, ["command", "health", ...target, "--input", "{}"], "cleanup pending", fail);
+            assert.equal(result.code, fail ? 1 : 130, result.stderr); assert.equal(result.stdout, "");
+            const errors = result.stderr.trim().split("\n").filter(line => line.startsWith("{"));
+            assert.equal(errors.length, 1, result.stderr);
+            assert.equal(JSON.parse(errors[0]).error.code, fail ? "internal_error" : "cancelled");
+        }
+    }
+});

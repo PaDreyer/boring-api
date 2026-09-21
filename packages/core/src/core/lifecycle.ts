@@ -2,6 +2,8 @@ import type { Express } from "express";
 import { createServer, Server } from "http";
 import { Execution, ExecutionContext, ExecutionError, ExecutionIdentity, ExecutionOptions, duration } from "./execution";
 import { SetupContext, setupLifecycle } from "./setupContext";
+import type { DeliveryKind, EventMetadata, EventReceipt, ScheduleOccurrence } from "./triggers";
+import type { JsonValue } from "./jobs";
 import type { JobAttemptResult, WorkerOptions } from "./jobs";
 
 export interface ApplicationOptions {
@@ -32,8 +34,8 @@ export class ApplicationRuntime<Services extends object = Record<string, unknown
     private readonly idle = new Set<() => void>();
     private readonly servers = new Set<Server>();
     private readonly background = new Set<Promise<unknown>>();
-    private wakeWorker?: () => void;
-    private working = false;
+    private readonly wakeLoops = new Set<() => void>();
+    private readonly working = new Set<string>();
     private shutdown?: Promise<void>;
     private completion?: Promise<void>;
     private readonly executionTimeout: number;
@@ -73,27 +75,56 @@ export class ApplicationRuntime<Services extends object = Record<string, unknown
         } finally { this.finish(execution); }
     }
     /** One delivery, including claim, heartbeat and acknowledgement, owned until actual settlement. */
-    runJob(options: WorkerOptions = {}): Promise<JobAttemptResult | undefined> {
+    runJob(options: WorkerOptions & { kind?: DeliveryKind } = {}): Promise<JobAttemptResult | undefined> {
         if (!this.ready) return Promise.reject(new ExecutionError("unavailable", "Application is not accepting jobs"));
-        const pending = setupLifecycle(this.setup).jobs.attempt(this, options);
+        const lifecycle = setupLifecycle(this.setup);
+        const pending = Promise.resolve().then(() => options.kind && options.kind !== "job" ? lifecycle.triggers.attempt(this, options.kind, options) : lifecycle.jobs.attempt(this, options));
         this.background.add(pending);
         void pending.finally(() => this.background.delete(pending)).catch(() => {});
         return pending;
     }
+    private own<Result>(pending: Promise<Result>): Promise<Result> {
+        this.background.add(pending);
+        void pending.finally(() => this.background.delete(pending)).catch(() => {});
+        return pending;
+    }
+    acceptEvent(options: ExecutionOptions, event: EventMetadata & { readonly payload: unknown }): Promise<EventReceipt> {
+        if (!this.ready) return Promise.reject(new ExecutionError("unavailable", "Application is closing"));
+        return this.own(setupLifecycle(this.setup).triggers.accept(this, options, event));
+    }
+    tick(): Promise<readonly ScheduleOccurrence[]> {
+        if (!this.ready) return Promise.reject(new ExecutionError("unavailable", "Application is closing"));
+        return this.own(setupLifecycle(this.setup).triggers.tick(this));
+    }
+    command(name: string, input: unknown, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<JsonValue> {
+        if (!this.ready) return Promise.reject(new ExecutionError("unavailable", "Application is closing"));
+        return this.own(setupLifecycle(this.setup).triggers.command(this, name, input, options));
+    }
+    private pause(poll: number): Promise<void> {
+        return new Promise(resolve => {
+            const wake = () => { clearTimeout(timer); this.wakeLoops.delete(wake); resolve(); };
+            const timer = setTimeout(wake, poll);
+            this.wakeLoops.add(wake);
+        });
+    }
+    async schedule(options: { pollIntervalMs?: number } = {}): Promise<void> {
+        if (!this.ready || this.working.has("scheduler")) throw new ExecutionError("unavailable", "Scheduler already running or application closing");
+        const poll = duration(options.pollIntervalMs ?? 1000, "Scheduler poll interval");
+        this.working.add("scheduler");
+        try { while (this.ready) { await this.tick(); if (this.ready) await this.pause(poll); } }
+        finally { this.working.delete("scheduler"); }
+    }
     /** Sequential worker; scale with independent processes. No HTTP listener or global signals. */
-    async work(options: WorkerOptions = {}): Promise<void> {
-        if (!this.ready || this.working) throw new ExecutionError("unavailable", "Worker is already running or application is closing");
+    async work(options: WorkerOptions & { kind?: DeliveryKind } = {}): Promise<void> {
+        if (!this.ready || this.working.has(options.kind ?? "job")) throw new ExecutionError("unavailable", "Worker is already running or application is closing");
         const poll = duration(options.pollIntervalMs ?? 1000, "Worker poll interval");
-        this.working = true;
+        this.working.add(options.kind ?? "job");
         try {
             while (this.ready) {
                 const result = await this.runJob(options);
-                if (!result && this.ready) await new Promise<void>(resolve => {
-                    const timer = setTimeout(() => { this.wakeWorker = undefined; resolve(); }, poll);
-                    this.wakeWorker = () => { clearTimeout(timer); this.wakeWorker = undefined; resolve(); };
-                });
+                if (!result && this.ready) await this.pause(poll);
             }
-        } finally { this.working = false; }
+        } finally { this.working.delete(options.kind ?? "job"); }
     }
     /** Own an HTTP listener, including listeners around a custom Express parent. */
     async listen(port = 4040, handler: Express = this.http): Promise<Server> {
@@ -126,7 +157,7 @@ export class ApplicationRuntime<Services extends object = Record<string, unknown
     close(): Promise<void> {
         if (this.shutdown) return this.shutdown;
         this.status = "draining";
-        this.wakeWorker?.();
+        for (const wake of this.wakeLoops) wake();
         const stopped = Promise.allSettled([...this.servers].map(server => new Promise<void>((resolve, reject) => {
             server.close(error => error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING" ? reject(error) : resolve());
             server.closeIdleConnections?.();
@@ -159,4 +190,4 @@ export class ApplicationRuntime<Services extends object = Record<string, unknown
 }
 
 /** Public owner handle. Internal admission and completion are framework-only. */
-export type Application<Services extends object = Record<string, unknown>> = Pick<ApplicationRuntime<Services>, "http" | "execute" | "runJob" | "work" | "listen" | "close" | "closed" | "state" | "ready">;
+export type Application<Services extends object = Record<string, unknown>> = Pick<ApplicationRuntime<Services>, "http" | "acceptEvent" | "tick" | "schedule" | "command" | "execute" | "runJob" | "work" | "listen" | "close" | "closed" | "state" | "ready">;

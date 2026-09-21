@@ -201,3 +201,5 @@ verifies and publishes the packages. Publishing skips an existing version only
 when its registry integrity matches the exact verified tarball. Different contents
 under an existing version fail the release; registry errors other than a missing
 version also fail it.
+
+Schedules, event consumers and application commands use the complete [trigger contract](triggers.md), including setup grants, PostgreSQL migration, static checks, generation and separate compiled process startup.

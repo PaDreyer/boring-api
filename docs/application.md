@@ -341,3 +341,5 @@ and runtime hook contracts. `start` and `createApp` do not run static checks;
 startup on those diagnostics. `boring inspect` uses the same mandatory checks
 as `boring check`, as do the `boring add` generators. Follow the
 [agent workflow](agent-guide.md) when extending an application.
+
+Schedules, event consumers and application commands use the complete [trigger contract](triggers.md), including setup grants, PostgreSQL migration, static checks, generation and separate compiled process startup.

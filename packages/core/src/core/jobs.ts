@@ -44,7 +44,7 @@ export interface JobFailure { readonly code: string; readonly message: string; }
 /** Each method is awaited. Fenced writes return false once a lease has expired or changed. */
 export interface JobAdapter {
     enqueue(job: StoredJob): Promise<void>;
-    claim(leaseMs: number): Promise<JobClaim | undefined>;
+    claim(leaseMs: number, kind?: import("./triggers").DeliveryKind): Promise<JobClaim | undefined>;
     renew(claim: JobClaim, leaseMs: number): Promise<boolean>;
     succeed(claim: JobClaim): Promise<boolean>;
     fail(claim: JobClaim, error: JobFailure, retryInMs?: number): Promise<boolean>;

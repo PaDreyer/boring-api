@@ -9,13 +9,13 @@ only its own compiled implementation; cross-package imports use public exports.
 | Package | Responsibility | Public entry points |
 | --- | --- | --- |
 | `@boringapi/core` | Application/execution lifecycle, HTTP runtime, browser transport and shared filesystem conventions | Root runtime API; `/client`; `/conventions`; `/agent-guide` |
-| `@boringapi/jobs-postgres` | Optional compiler-free durable queue; borrows the application PostgreSQL pool | `createPostgresJobs`, `jobMigration`, `JobRecord` |
+| `@boringapi/jobs-postgres` | Optional compiler-free durable queue; borrows the application PostgreSQL pool | `createPostgresJobs`, `jobMigration`, `triggerMigration`, `JobRecord` |
 | `@boringapi/compiler` | TypeScript configuration, alias resolution, import transforms and symbol analysis | Root compiler utilities; `/register` for `registerTypeScript` |
-| `@boringapi/typegen` | Route and hook types, standalone browser contracts | `generateTypes`, `generateClientContracts`, `TypegenResult` |
+| `@boringapi/typegen` | HTTP and trigger types, standalone browser contracts | `generateTypes`, `generateClientContracts`, `TypegenResult` |
 | `@boringapi/analyzer` | Static project analysis, architecture checks and inspection | `analyzeProject`, `synchronizeProject`, `checkArchitecture`, `inspectProject` and diagnostic/catalog formatting |
 | `@boringapi/build` | Portable application emission and locating compiled output | `buildProject`, `resolveStartDirectory`, `startProject`, `startWorker` |
-| `@boringapi/scaffold` | Project, module and endpoint scaffolding | `initializeProject`, `addModule`, `addEndpoint`, `addJob` |
-| `@boringapi/dev` | Source watching and isolated server workers | `startDevServer`, `DevServer` |
+| `@boringapi/scaffold` | Project, module, endpoint and trigger scaffolding | `initializeProject`, `addModule`, `addEndpoint`, `addJob`, `addTrigger` |
+| `@boringapi/dev` | Source watching and isolated server workers | `startDevServer`, `runSourceCommand`, `DevServer` |
 | `@boringapi/cli` | Command arguments, result presentation and API dispatch | The `boring` executable; no library entry point |
 
 Core has no dependency on the development packages. Compiler utilities form the
@@ -35,6 +35,12 @@ Job runtime types include `JobContext`, `JobAdapter`, `JobPort`, `JobReceipt`,
 failures. Application adds `runJob()` and `work()`, setup adds `jobs()`.
 See [durable jobs](jobs.md) and [lifecycle and migration](lifecycle.md) for construction, controlled execution
 and disposal. These exports require no compiler or development package.
+
+Trigger types include `ScheduleContext`, `EventContext`, `CommandContext`,
+`ScheduleTiming`, `ScheduleOccurrence`, `EventMetadata`, `EventReceipt` and
+`TriggerAdapter`. Application adds `tick`, `schedule`, `acceptEvent` and `command`;
+setup adds `schedules`, `events` and `commands`. The [trigger reference](triggers.md)
+defines their contracts and the shared `commandFailure` transport vocabulary.
 
 ## Releases and compatibility
 
@@ -82,7 +88,10 @@ The compiler root entry does not register loaders. See the
 [source compiler workflow](cli.md#module-shortcuts-editor-support-and-builds).
 
 `startDevServer(root, apiDirectory, port?, projectFile?, worker = false)` returns a `DevServer`
-with an idempotent asynchronous `close()` method. Set worker to true for jobs;
+with an idempotent asynchronous `close()` method. Set worker to true for jobs,
+`"scheduler"` for schedule admission, `"schedule"` for schedule delivery or `"event"`
+for consumers. `runSourceCommand(root, apiDirectory, name, input, projectFile?, signal?)`
+checks and invokes an application command once, then awaits cleanup;
 source admission runs the shared mandatory checks before each start/restart. It owns its watcher and child
 processes; the caller owns process signal handling. On reload and close it sends
 SIGTERM, then SIGKILL after five seconds if the worker has not exited.

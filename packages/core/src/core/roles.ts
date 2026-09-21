@@ -7,6 +7,9 @@ export const APPLICATION_ROLES = {
     hook: "Request pipeline; calls public operations",
     config: "Application configuration; loads and validates data before setup",
     execution: "Controlled non-HTTP entry; calls injected public operations",
+    schedule: "Scheduled entry; validates payload and calls injected public operations",
+    event: "Durable event consumer; calls injected public operations",
+    command: "Application command; calls injected public operations",
     job: "Durable job entry; validates payload and calls injected public operations",
     setup: "Application composition; constructs dependencies and owns resource cleanup",
     facade: "Public use cases; coordinates access, services and transactions",
@@ -34,7 +37,7 @@ export function withinDirectory(parent: string, file: string): boolean {
 export function applicationDirectories(apiDirectory: string) {
     const api = canonicalPath(apiDirectory);
     const parent = dirname(api);
-    return { api, jobs: canonicalPath(join(parent, "jobs")), executions: canonicalPath(join(parent, "executions")), modules: canonicalPath(join(parent, "modules")), infra: canonicalPath(join(parent, "infra")),
+    return { api, schedules: canonicalPath(join(parent, "schedules")), events: canonicalPath(join(parent, "events")), commands: canonicalPath(join(parent, "commands")), jobs: canonicalPath(join(parent, "jobs")), executions: canonicalPath(join(parent, "executions")), modules: canonicalPath(join(parent, "modules")), infra: canonicalPath(join(parent, "infra")),
         browser: canonicalPath(join(parent, "web/client")), pages: canonicalPath(join(parent, "web/server")) };
 }
 
@@ -56,6 +59,7 @@ export function applicationRole(apiDirectory: string, file: string): RoleSource 
         return { role, module: parts.length ? module : undefined, public: entry === "facade" || entry === "schemas" };
     }
     if (withinDirectory(roots.executions, target)) return { role: "execution" };
+    for (const kind of ["schedule", "event", "command"] as const) if (withinDirectory(roots[`${kind}s`], target)) return { role: kind };
     if (withinDirectory(roots.jobs, target)) return { role: "job" };
     if (withinDirectory(roots.infra, target)) return { role: "adapter" };
     if (withinDirectory(roots.browser, target)) return { role: "browser" };

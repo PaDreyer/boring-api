@@ -52,13 +52,13 @@
     "@boringapi/build": "workspace:^",
     "@boringapi/scaffold": "workspace:^",
     "@boringapi/dev": "workspace:^",
-    "@types/node": "^18.11.17"
+    "@types/node": "^18.11.17",
+    "@boringapi/core": "workspace:^"
   },
   "devDependencies": {
     "typescript": "^4.9.4",
     "ts-node": "^10.9.1",
     "zod": "^3.20.2",
-    "@boringapi/core": "workspace:^",
     "@boringapi/typegen": "workspace:^"
   }
 }

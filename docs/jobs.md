@@ -198,7 +198,7 @@ may fail after business state has committed, or a lost response may obscure whet
 it succeeded. Use reconciliation/idempotent retries appropriate to the application.
 A general transactional outbox belongs to milestone 5 and is not implemented here.
 
-- `boring inspect --json`: catalog v4 includes jobs, payload types, version/policy,
+- `boring inspect --json`: catalog v5 includes jobs, payload types, version/policy,
   source locations, facade calls and the shared dependency roles. No source execution.
 - `boring add job orders/create --from orders.create --payload orders.queuedOrder`:
   finds an existing `(execution, payload)` operation and public schema, validates the
@@ -218,3 +218,5 @@ inspection schema version change. Install the optional adapter only where needed
 append/apply migrations, configure grants, make repeated effects safe, regenerate
 types and rebuild before deploying workers. Existing HTTP-only apps need no queue.
 Release version changes, commits and publication are separate maintainer actions.
+
+Schedules, event consumers and application commands use the complete [trigger contract](triggers.md), including setup grants, PostgreSQL migration, static checks, generation and separate compiled process startup.

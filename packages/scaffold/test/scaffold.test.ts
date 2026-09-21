@@ -1,7 +1,7 @@
 import { formatHost } from "@boringapi/compiler";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { it } from "node:test";
@@ -277,7 +277,7 @@ it("rejects traversal, ambiguous casing, symlinks and invalid existing applicati
     symlinkSync(outside, join(root, "api/linked"), "dir");
     assert.throws(() => addEndpoint(root, "api", "linked/get"), /symbolic links/);
     assert.equal(existsSync(join(outside, "get.ts")), false);
-    rmSync(join(root, "api/linked"));
+    unlinkSync(join(root, "api/linked"));
     write(root, "modules/invalid/facade.ts", 'import { handler } from "../../api/health/get"; export const invalid = handler;');
     assert.throws(() => addModule(root, "api", "invoices"), /BORING104/);
     assert.equal(existsSync(join(root, "modules/invoices")), false);
@@ -299,4 +299,39 @@ it("generates jobs by reusing inspected facade operations and public schemas wit
     assert.ok(existsSync(join(root, "dist/boring-worker.cjs")));
     assert.throws(() => addJob(root, "api", "health/check", "health.get", "health.health"), /overwrite/);
     assert.throws(() => addJob(root, "api", "health/unknown", "missing.op", "health.health"), /existing facade/);
+});
+
+it("generates checked schedules, events and commands, rolls back invalid output and runs portable commands", async () => {
+    const { addTrigger } = await import("../src");
+    const root = fixture();
+    write(root, "modules/health/facade.ts", 'import type {ExecutionContext} from "@boringapi/core"; export function createHealth() {return {get(ctx:ExecutionContext,input:{status:"ok"}) {ctx.throwIfAborted(); return input;}};}');
+    write(root, "api/health/get.ts", 'import type {GetHandler} from "./$types"; export const handler:GetHandler=ctx=>ctx.services.health.get(ctx.execution,{status:"ok"});');
+    write(root, "executions/health.ts", readFileSync(join(root, "executions/health.ts"), "utf8").replace("services.health.get(execution)", 'services.health.get(execution,{status:"ok"})'));
+    const setup = readFileSync(join(root, "api/+setup.ts"), "utf8").replace('return {', 'ctx.commands({identity:{kind:"machine",id:"command",permissions:[]}}); ctx.onClose("test",()=>console.error("command disposed")); return {').replace('_ctx: SetupContext', 'ctx: SetupContext');
+    write(root, "api/+setup.ts", setup);
+    const common = { from: "health.get", payload: "health.health" };
+    for (const kind of ["schedule", "event", "command"] as const) {
+        const options = { ...common, output: "health.health", input: { status: "ok" }, timing: { startAt: 0, everyMs: 1000, missed: "latest" as const, maxCatchUp: 1, overlap: "skip" as const }, event: { type: "health.requested", version: 1 } };
+        const result = addTrigger(root, "api", kind, "health/check", options);
+        assert.equal(result.files[0], `${kind}s/health/check/${kind}.ts`);
+        assert.doesNotMatch(readFileSync(join(root, result.files[0]), "utf8"), /permissions/);
+        assert.throws(() => addTrigger(root, "api", kind, "health/check", options), /overwrite/);
+    }
+    assert.throws(() => addTrigger(root, "api", "schedule", "bad", { ...common, input: { status: 7 }, timing: { startAt: 0, everyMs: 1000, missed: "latest", maxCatchUp: 1, overlap: "skip" } }), /check diagnostics/);
+    assert.equal(existsSync(join(root, "schedules/bad")), false);
+    assert.throws(() => addTrigger(root, "api", "command", "bad", common), /output schema/);
+    const project = checked(root); assert.equal(inspectProject(project).triggers.length, 3);
+    assert.equal(buildProject(project).diagnostics.length, 0);
+    for (const name of ["scheduler", "consumer", "schedule-worker", "command"]) assert.ok(existsSync(join(root, `dist/boring-${name}.cjs`)));
+    const run = (name: string, input: string) => spawnSync(process.execPath, [join(root, "dist/boring-command.cjs"), name, input], { cwd: root, encoding: "utf8" });
+    const ok = run("health/check", '{"status":"ok"}'); assert.equal(ok.status, 0, ok.stderr); assert.deepEqual(JSON.parse(ok.stdout), { status: "ok" }); assert.match(ok.stderr, /command disposed/);
+    for (const [name, input, code] of [["health/check", "{", "invalid_input"], ["health/check", "{}", "invalid_input"], ["missing", "{}", "unknown_command"]]) {
+        const result = run(name, input); assert.equal(result.status, 2, result.stderr); assert.match(result.stderr, new RegExp(code)); assert.equal(result.stdout, "");
+    }
+
+    write(root, "api/+setup.ts", setup.replace('console.error("command disposed")', 'Promise.reject(new Error("cleanup failed"))'));
+    assert.equal(buildProject(checked(root)).diagnostics.length, 0);
+    const cleanup = run("health/check", '{"status":"ok"}'); assert.equal(cleanup.status, 1); assert.equal(cleanup.stdout, "");
+    assert.equal(JSON.parse(cleanup.stderr).error.code, "internal_error");
+
 });

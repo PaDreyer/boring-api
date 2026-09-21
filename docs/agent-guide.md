@@ -9,9 +9,16 @@ The [project vision](vision.md) explains the common architecture: entry points
 delegate to facades, facades coordinate services, and business code uses injected
 ports implemented by infrastructure. Follow the enforced [role contract](architecture.md), including its splitting
 conventions and public operation shapes. The [roadmap](roadmap.md) identifies
-the remaining enforcement and backend-runtime work; [durable jobs](jobs.md) are supported; schedules, general events
-and commands remain planned. Use the current references
+the remaining enforcement and backend-runtime work; [durable jobs](jobs.md) are supported; [schedules, event consumers and commands](triggers.md) share the same lifecycle. Use the current references
 for available APIs and do not invent parallel entry-point or service registries.
+
+Boring API deliberately uses [bounded conventions](vision.md#bounded-conventions-and-analysis)
+at architecture boundaries. Prefer explicit facade calls, dependency wiring and
+invocation-local execution state. Valid TypeScript can still use an unsupported
+form: follow the diagnostic's supported alternative instead of hiding the pattern
+behind additional indirection or weakening checks. The [architecture reference](architecture.md)
+defines the current limits. Request broader syntax support for a concrete application
+need, not merely because JavaScript permits another way to express the same behavior.
 
 Install `@boringapi/core` and `zod` as runtime dependencies, and `@boringapi/cli`
 as a development dependency. Build with development dependencies available.
@@ -25,7 +32,7 @@ package runtime code; the architecture checker rejects those imports, including 
 re-exports. `boring init` places Core and Zod only in `dependencies` and CLI only in
 `devDependencies`, preserving existing versions and reporting moves. Conflicting
 versions across those sections must be resolved before initialization. Build output
-reserves `boring-start.cjs`, `boring-worker.cjs` and `.boring-build.json`; avoid source files or directories
+reserves `boring-start.cjs`, `boring-worker.cjs`, the [trigger process scripts](triggers.md) and `.boring-build.json`; avoid source files or directories
 that emit to those paths and keep output separate from `.boring/build.json`.
 See [deployment](cli.md) and [package responsibilities and APIs](packages.md).
 
@@ -46,10 +53,32 @@ updating them. Framework release automation is documented in the
    fix the diagnostics and run it again.
 4. Extend the module that already owns the behavior. Search public facades and
    schemas, then its private service and storage port. Keep one
-   implementation of each business operation across HTTP, jobs and web pages.
-   Job handlers call injected facades without replacing their methods; reflective
+   implementation of each business operation across HTTP, jobs, schedules, events,
+   commands and web pages. Entry handlers call injected facades without replacing their methods; reflective
    mutation through `Object`/`Reflect`, including extracted/destructured methods,
    fails the same mandatory architecture checks.
+   Passing an operation object through a local helper or assigning through an
+   array/object pattern does not permit mutation.
+   Context-capturing callbacks must remain inside their invocation, including when
+   forwarded through helper parameters (also defaults/rest/spread), assignment
+   patterns or mutable aliases, or extracted from arrays with `pop`/`shift`/`slice`.
+   Overload signatures and mutable callable annotations do not hide a helper's
+   implementation, including calls through native `call`/`apply`. `reverse()`/`sort()`
+   return the same array; their aliases and reordered elements keep the original
+   array's lifetime. Shallow copies also share their nested arrays and objects.
+   Functions invoked from arrays follow the same rules. Closures produced by
+   `map`/`flatMap`/`Array.from` keep their captures, including when invoked through
+   native `call`/`apply`/`bind` or returned via a callback's `thisArg`.
+   Use explicit arguments for native array callbacks. `apply` accepts an inline
+   array or constant local tuple without spread. Dynamic `apply` lists, spread
+   callback arguments and overly deep native alias/`bind` chains produce
+   `BORING115` at the call site, including when the values happen to be safe data.
+   Rewrite these as direct array method calls; the checker does not interpret
+   arbitrary dynamic JavaScript to establish callback lifetime.
+   Locally bound callbacks keep their bound argument positions when passed to
+   array methods. Copy data before retaining a result.
+   Bound callbacks and extracted execution signals/methods have the same lifetime;
+   copy needed data inside the invocation instead of retaining the capability.
 
 Direct CLI commands below assume `api/`. Pass `--dir src/api` (or the actual API
 path) and `--project <tsconfig>` when needed. Generated package scripts already
@@ -71,6 +100,9 @@ before invoking their CLI. See [inspection](inspection.md) and [CLI configuratio
 | Configuration | Root `+config.ts`: export Zod `schema` and data-only `load(env)`. Setup reads validated `ctx.config`. |
 | Database or external SDK | Sibling `infra/`; implement typed ports, construct adapters in setup, immediately register `ctx.onClose`, and inject them into facades. |
 | Durable job | Sibling `jobs/<name>/job.ts`; validate payload and call the injected facade. Bind an enqueue port in setup, enforce business access and idempotency. [Job rules](jobs.md). |
+| Schedule | Sibling `schedules/<name>/schedule.ts`; explicit UTC interval, bounded missed-run and overlap policy. Use occurrence IDs for repeat-safe business input. [Trigger rules](triggers.md). |
+| Event consumer | Sibling `events/<name>/event.ts`; declare type/version and payload, call the injected facade, preserve business idempotency across delivery attempts. [Trigger rules](triggers.md). |
+| Application command | Sibling `commands/<name>/command.ts`; input/output schemas, timeout and configured machine grants. Run once through the source or compiled command entry. [Trigger rules](triggers.md). |
 | Controlled non-HTTP invocation | Sibling `executions/`; call `application.execute` with a trusted identity, then the existing injected facade. |
 | Authentication or route access | Root `+auth.ts`; reuse the application's identity provider and permission catalog. |
 | Shared request behavior | Named `+middleware`, `+envelope` or `+error` hooks at the appropriate URL scope. |
@@ -235,7 +267,7 @@ See [database and web patterns](web.md) for client contracts and a runnable refe
 ## Develop, verify and deploy
 
 - Use the project's scripts. `npm run dev` watches the API and sibling `modules`,
-  `infra`, `jobs`, `executions` and `web` source; frontend tooling handles browser assets separately.
+  `infra`, `jobs`, `schedules`, `events`, `commands`, `executions` and `web` source; frontend tooling handles browser assets separately.
 - Finish changes with `npm run check`, `npm test` and `npm run build` (or the
   project's equivalent). Add meaningful behavior tests, including direct facade
   permission tests where callers can bypass HTTP.

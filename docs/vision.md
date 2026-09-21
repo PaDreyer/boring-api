@@ -108,6 +108,37 @@ rule that enforces it, and the behavioral tests needed beyond that rule. A promi
 without that enforcement remains an implementation gap. Documentation and a happy
 path example alone do not close it.
 
+## Bounded conventions and analysis
+
+Boring API deliberately supports a limited set of explicit, mechanically checkable
+forms at architecture boundaries. Predictable responsibilities, dependencies and
+lifetimes are the product goal. Supporting every way to express equivalent behavior
+in JavaScript or TypeScript is not a goal, nor is building a general JavaScript
+interpreter or security sandbox.
+
+Restrictions must protect a concrete architectural contract and leave ordinary
+application logic readable. Common aliases, destructuring and callbacks must not
+silently bypass a rule. When a recognized form exceeds the supported analysis,
+reject it with a stable, positioned diagnostic and a concrete supported alternative.
+An unsupported form is not necessarily incorrect JavaScript; the diagnostic should
+explain the convention rather than label the code as bad.
+
+Before extending value-flow analysis, first consider whether an explicit, simpler
+convention meets the application need. Additional syntax support requires a concrete
+consumer use case and a benefit that justifies implementation and maintenance cost.
+A theoretical variant or a reproducible bypass alone does not require supporting
+that syntax: an explicit rejection can be the appropriate fix. Changes to accepted
+forms still require documentation, compatibility consideration and regression tests.
+
+Audits should target supported contracts, plausible development mistakes and
+consequential runtime failures. Keep existing regression tests and correct violations
+of supported guarantees. Do not pursue an open-ended search for increasingly exotic
+syntax combinations just to expand the analyzer. Once the acceptance criteria and
+known findings are addressed, resume roadmap work; revisit syntax limitations when
+real application needs or concrete failures justify it. This policy does not weaken
+mandatory checks or claim complete detection of arbitrary dynamic behavior. Current
+supported forms and limitations remain documented in the architecture reference.
+
 ## What a complete backend needs
 
 The following capabilities belong to the product scope. Each must fit the same

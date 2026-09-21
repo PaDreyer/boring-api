@@ -85,11 +85,11 @@ function registerRoute(app: Express, route: Route, auth: AuthModule | undefined,
 
 export class BoringApi {
     async createApp<Services extends object = Record<string, unknown>>(apiDirectory: string, options: ApplicationOptions = {}): Promise<Application<Services>> {
-        const { routes, jobs, config, setup: setupModule, auth, rootScope } = discover(apiDirectory);
+        const { routes, jobs, schedules, events, commands, config, setup: setupModule, auth, rootScope } = discover(apiDirectory);
         const environment = options.env ?? process.env;
         // Node's native environment is an exotic object, whether supplied explicitly or by default.
         const configuration = config ? snapshot(await config.schema.parseAsync(await config.load(snapshot(environment === process.env ? { ...environment } : environment)))) : {};
-        const setup = new SetupContext(configuration, jobs);
+        const setup = new SetupContext(configuration, jobs, { schedules, events, commands });
         const app = express();
         const application = new ApplicationRuntime<Services>(app, setup, options);
         try {

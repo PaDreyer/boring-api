@@ -7,7 +7,7 @@ export interface DevServer { close(): Promise<void>; }
 
 function watchDirectories(directory: string, onChange: () => void): () => void {
     const parent = dirname(directory);
-    const names = new Set([basename(directory), "modules", "infra", "web", "executions", "jobs"]);
+    const names = new Set([basename(directory), "modules", "infra", "web", "executions", "jobs", "schedules", "events", "commands"]);
     let watchers: FSWatcher[] = [];
     let timer: NodeJS.Timeout | undefined;
     let stopped = false;
@@ -52,7 +52,7 @@ function watchDirectories(directory: string, onChange: () => void): () => void {
     };
 }
 
-export function startDevServer(root: string, apiDirectory: string, port = 4040, projectFile?: string, worker = false): DevServer {
+export function startDevServer(root: string, apiDirectory: string, port = 4040, projectFile?: string, worker: boolean | "scheduler" | "schedule" | "event" = false): DevServer {
     root = resolve(root);
     const api = resolve(root, apiDirectory);
     const sync = () => {
@@ -82,7 +82,7 @@ export function startDevServer(root: string, apiDirectory: string, port = 4040, 
     const start = () => {
         if (stopping) return;
         const spawned = spawn(process.execPath, [join(__dirname, "worker.js"), root, api, String(port),
-            projectFile ? resolve(root, projectFile) : "", worker ? "jobs" : "http"], {
+            projectFile ? resolve(root, projectFile) : "", typeof worker === "string" ? worker : worker ? "jobs" : "http"], {
             cwd: root,
             stdio: "inherit",
         });
@@ -127,4 +127,18 @@ export function startDevServer(root: string, apiDirectory: string, port = 4040, 
     };
     start();
     return { close };
+}
+
+/** One checked source invocation. Source watching never replays application commands. */
+export async function runSourceCommand(root: string, apiDirectory: string, name: string, input: unknown, projectFile?: string, signal?: AbortSignal) {
+    const project = analyzeProject(resolve(root), apiDirectory, projectFile);
+    if (project.diagnostics.length || project.architecture.length) throw new Error("Fix check diagnostics before command execution: " + project.diagnostics.map(d => d.messageText).join("\n") + "\n" + formatArchitectureDiagnostics(project.architecture, root));
+    const { registerTypeScript } = await import("@boringapi/compiler/register");
+    const { BoringApi } = await import("@boringapi/core");
+    const stop = registerTypeScript(project.apiDirectory, project.configuration.options.configFilePath as string | undefined);
+    try {
+        const application = await new BoringApi().createApp(project.apiDirectory);
+        try { return await application.command(name, input, { signal }); }
+        finally { await application.close(); await application.closed; }
+    } finally { stop(); }
 }

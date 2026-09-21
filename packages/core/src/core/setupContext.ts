@@ -2,7 +2,9 @@ import { Logger } from "./logger";
 import { LifecycleError } from "./lifecycle";
 import { JobAdapter, JobBindings, JobDeclaration, JobOptions, JobRuntime } from "./jobs";
 
-const owners = new WeakMap<object, { seal(): void; dispose(): Promise<void>; jobs: JobRuntime }>();
+import { TriggerAdapter, TriggerDeclarations, TriggerOptions, TriggerRuntime } from "./triggers";
+
+const owners = new WeakMap<object, { seal(): void; dispose(): Promise<void>; jobs: JobRuntime; triggers: TriggerRuntime }>();
 
 /** Internal ownership API, intentionally absent from Core public exports. */
 export function setupLifecycle(context: object) {
@@ -18,15 +20,27 @@ export class SetupContext<Config = Readonly<Record<string, never>>, Jobs = Recor
     private sealed = false;
     private disposal?: Promise<void>;
 
-    constructor(readonly config: Config = {} as Config, declarations: ReadonlyMap<string, JobDeclaration> = new Map()) {
+    constructor(readonly config: Config = {} as Config, declarations: ReadonlyMap<string, JobDeclaration> = new Map(), triggers: TriggerDeclarations = { schedules: new Map(), events: new Map(), commands: new Map() }) {
         super();
         this.set("logger", new Logger());
-        owners.set(this, { seal: () => this.seal(), dispose: () => this.dispose(), jobs: new JobRuntime(declarations) });
+        owners.set(this, { seal: () => this.seal(), dispose: () => this.dispose(), jobs: new JobRuntime(declarations), triggers: new TriggerRuntime(triggers) });
     }
     /** Bind infrastructure during composition. Inject a named port into a facade, never return it from setup. */
     jobs(adapter: JobAdapter, options: JobOptions): JobBindings<Jobs> {
         if (this.sealed) throw new Error("Jobs can only be configured during setup");
         return setupLifecycle(this).jobs.bind<Jobs>(adapter, options);
+    }
+    schedules(adapter: TriggerAdapter, options: TriggerOptions): void {
+        if (this.sealed) throw new Error("Schedules can only be configured during setup");
+        setupLifecycle(this).triggers.bind("schedule", adapter, options);
+    }
+    events(adapter: TriggerAdapter, options: Pick<TriggerOptions, "identity">): void {
+        if (this.sealed) throw new Error("Events can only be configured during setup");
+        setupLifecycle(this).triggers.bind("event", adapter, options);
+    }
+    commands(options: TriggerOptions): void {
+        if (this.sealed) throw new Error("Commands can only be configured during setup");
+        setupLifecycle(this).triggers.commands(options);
     }
     /** Register immediately after acquisition, before any later fallible startup step. */
     onClose(name: string, dispose: () => void | Promise<void>): void {

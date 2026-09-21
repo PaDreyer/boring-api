@@ -173,9 +173,10 @@ async function main() {
         closeDatabase = async () => { await database.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); };
         // Explicit migration action, before either HTTP or worker startup.
         await database.query(consumerRequire("@boringapi/jobs-postgres").jobMigration.sql);
+        await database.query(consumerRequire("@boringapi/jobs-postgres").triggerMigration.sql);
         run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund"], consumer);
-        writeFileSync(join(consumer, "src/infra/lifetime.ts"), `export function acquire() {
-    return { close() { console.info("resource disposed"); } };
+        writeFileSync(join(consumer, "src/infra/lifetime.ts"), `export function acquire(fail: boolean) {
+    return { close() { console.info("resource disposed"); if (fail) throw new Error("cleanup failed"); } };
 }
 `);
         mkdirSync(join(consumer, "src/modules/dispatch/ports"), { recursive: true });
@@ -194,8 +195,8 @@ export function createQueue(url: string) { const pool = new Pool({ connectionStr
 `);
         writeFileSync(join(consumer, "src/http/+config.ts"), `import { z } from "zod";
 import type { ConfigEnvironment } from "./$types";
-export const schema = z.object({ databaseUrl: z.string() });
-export const load = (env: ConfigEnvironment) => ({ databaseUrl: env.DATABASE_URL });
+export const schema = z.object({ databaseUrl: z.string(), slowSetup: z.boolean(), failCleanup: z.boolean() });
+export const load = (env: ConfigEnvironment) => ({ databaseUrl: env.DATABASE_URL, slowSetup: env.BORING_CHECK_SLOW_SETUP === "true", failCleanup: env.BORING_CHECK_FAIL_CLEANUP === "true" });
 `);
         writeFileSync(join(consumer, "src/jobs/health/check/job.ts"), `import { z } from "zod";
 import type { JobHandler } from "./$types";
@@ -208,15 +209,31 @@ import { createHealth } from "$modules/health/facade";
 import { acquire } from "$infra/lifetime";
 import { createQueue } from "$infra/jobs";
 import { createDispatch } from "$modules/dispatch/facade";
-export function setup(ctx: SetupContext) {
-    const resource = acquire();
+export async function setup(ctx: SetupContext) {
+    const resource = acquire(ctx.config.failCleanup);
     ctx.onClose("fixture", () => resource.close());
     const queue = createQueue(ctx.config.databaseUrl);
     ctx.onClose("queue", () => queue.close());
     const jobs = ctx.jobs(queue.adapter, {identity:{kind:"machine",id:"packed-worker",permissions:[]}});
+    ctx.schedules(queue.adapter, {identity:{kind:"machine",id:"packed-scheduler",permissions:[]}});
+    ctx.events(queue.adapter, {identity:{kind:"machine",id:"packed-consumer",permissions:[]}});
+    ctx.commands({identity:{kind:"machine",id:"packed-command",permissions:[]}});
+    if (ctx.config.slowSetup) { console.error("setup waiting"); await new Promise(resolve => setTimeout(resolve, 200)); }
     return { health: createHealth(), dispatch: createDispatch(jobs.for("health/check")) };
 }
 `);
+        for (const kind of ["schedule", "event", "command"]) {
+            mkdirSync(join(consumer, `src/${kind}s/health/check`), { recursive: true });
+            const title = kind[0].toUpperCase() + kind.slice(1);
+            writeFileSync(join(consumer, `src/${kind}s/health/check/${kind}.ts`), `import {z} from "zod";
+import type {${title}Handler} from "./$types";
+${kind === "command" ? 'export const input=z.object({wait:z.boolean().optional()}); export const output=z.object({status:z.literal("ok")}); export const timeoutMs=30000;' : 'export const payload=z.object({}); export const version=1; export const policy={maxAttempts:3,retryDelayMs:10,timeoutMs:1000} as const;'}
+${kind === "schedule" ? 'export const input={}; export const timing={startAt:0,everyMs:3600000,missed:"latest",maxCatchUp:1,overlap:"skip"} as const;' : kind === "event" ? 'export const event={type:"health.requested",version:1} as const;' : ''}
+export const handler:${title}Handler=async ctx=> {
+${kind === "command" ? 'if(ctx.input.wait) {console.error("command waiting"); await new Promise<void>((resolve,reject)=>ctx.execution.signal.addEventListener("abort",()=>reject(ctx.execution.signal.reason),{once:true}));} return ctx.services.health.get(ctx.execution);' : 'await ctx.services.health.get(ctx.execution);'}
+};
+`);
+        }
         writeFileSync(join(consumer, "src/server.ts"), `import { join } from "path";
 import { BoringApi } from "@boringapi/core";
 async function main() {
@@ -246,7 +263,18 @@ main().catch(error => { console.error(error); process.exitCode = 1; });
         for (const [name, method] of Object.entries(publicApis)) assert.equal(typeof consumerRequire(name)[method], "function", name);
         // Public declaration dependencies must also resolve outside the workspace.
         writeFileSync(join(consumer, "tool-apis.ts"), Object.entries(publicApis).map(([name, method]) =>
-            `import { ${method} } from "${name}"; void ${method};`).join("\n"));
+            `import { ${method} } from "${name}"; void ${method};`).join("\n") + `
+import type { Application, ScheduleContext, EventContext, CommandContext, TriggerAdapter, ScheduleTiming, EventReceipt } from "@boringapi/core";
+import { commandFailure, validateScheduleTiming } from "@boringapi/core";
+import { triggerMigration } from "@boringapi/jobs-postgres";
+import { addTrigger } from "@boringapi/scaffold";
+import { runSourceCommand } from "@boringapi/dev";
+declare const app: Application; declare const adapter: TriggerAdapter;
+declare const schedule: ScheduleContext<{},{}>; declare const event: EventContext<{},{}>; declare const command: CommandContext<{},{}>;
+declare const timing: ScheduleTiming; declare const receipt: EventReceipt;
+void [app.command, app.acceptEvent, app.tick, app.schedule, adapter.acceptEvent, adapter.schedule, schedule.occurrence, event.event, command.input, receipt.deliveries];
+void [commandFailure, validateScheduleTiming, timing, triggerMigration, addTrigger, runSourceCommand];
+`);
         const compilerRequire = createRequire(consumerRequire.resolve("@boringapi/compiler/package.json"));
         run(process.execPath, [compilerRequire.resolve("typescript/bin/tsc"), "--noEmit", "--strict", "--esModuleInterop",
             "--target", "es2020", "--module", "commonjs", "--types", "node", "tool-apis.ts"], consumer);
@@ -318,7 +346,45 @@ finally {await app.close();} })().catch(e=>{console.error(e);process.exitCode=1;
         }
         assert.equal(worker.exitCode, 0, workerOutput); assert.equal(worker.signalCode, null);
         assert.match(workerOutput, /compiled job executed/); assert.match(workerOutput, /resource disposed/);
-        console.log(`All ${packages.length} tarballs verified: public APIs and declarations, documentation, CLI build, relocated HTTP/custom-server and controlled execution with cleanup, compiled durable PostgreSQL worker with SIGTERM cleanup, and npm ci --omit=dev without development packages.`);
+        const eventOutput = run(process.execPath, ["-e", `
+const {BoringApi}=require("@boringapi/core");
+(async()=>{const app=await new BoringApi().createApp(require("node:path").resolve("artifact/http"));
+try {const receipt=await app.acceptEvent({identity:{kind:"machine",id:"ingress",permissions:[]}}, {id:require("node:crypto").randomUUID(),type:"health.requested",version:1,payload:{}});console.log("delivery="+receipt.deliveries[0]);} finally {await app.close();}})().catch(e=>{console.error(e);process.exitCode=1;});
+`], deployment);
+        const eventId = /delivery=([a-f0-9-]+)/.exec(eventOutput)?.[1]; assert.ok(eventId);
+        async function processUntil(filename, done, expectedCode = 0, args = []) {
+            const child = spawn(process.execPath, [join(deployment, `artifact/${filename}`), ...args], {cwd:deployment,env,stdio:["ignore","pipe","pipe"]});
+            let output="", stderr="";child.stdout.on("data", chunk=>{output+=chunk;});child.stderr.on("data",chunk=>{output+=chunk;stderr+=chunk;});
+            const exited = new Promise(resolve=>child.once("close",resolve));
+            try {
+                const end=Date.now()+15000; let completed=false;
+                while(Date.now()<end && child.exitCode===null) { if(await done(output)){completed=true;break;} await new Promise(resolve=>setTimeout(resolve,30)); }
+                assert.ok(completed, `${filename} did not reach expected state: ${output}`);
+            } finally {child.kill("SIGTERM");const force=setTimeout(()=>child.kill("SIGKILL"),12000);await exited;clearTimeout(force);}
+            assert.equal(child.signalCode,null,output);assert.equal(child.exitCode,expectedCode,output);assert.match(output,/resource disposed/);
+            return stderr;
+        }
+        await processUntil("boring-consumer.cjs", async()=> (await database.query("SELECT status FROM boring_jobs WHERE id=$1",[eventId])).rows[0]?.status === "succeeded");
+        await processUntil("boring-scheduler.cjs", async()=> (await database.query("SELECT count(*)::int n FROM boring_jobs WHERE name='@schedule/health/check'")).rows[0].n === 1);
+        await processUntil("boring-schedule-worker.cjs", async()=> (await database.query("SELECT count(*)::int n FROM boring_jobs WHERE name='@schedule/health/check' AND status='succeeded'")).rows[0].n === 1);
+        const commandOutput = run(process.execPath, [join(deployment,"artifact/boring-command.cjs"),"health/check","{}"], deployment);
+        assert.match(commandOutput,/\{"status":"ok"\}/);assert.match(commandOutput,/resource disposed/);
+        for (const [name,input,code] of [["absent","{}","unknown_command"],["health/check","{","invalid_input"],["health/check",'{"wait":1}',"invalid_input"]]) {
+            const result=spawnSync(process.execPath,[join(deployment,"artifact/boring-command.cjs"),name,input],{cwd:deployment,env,encoding:"utf8"});
+            assert.equal(result.status,2,result.stderr);assert.match(result.stderr,new RegExp(code));
+        }
+        await processUntil("boring-command.cjs", async output=>output.includes("command waiting"),130,["health/check",'{"wait":true}']);
+        env.BORING_CHECK_SLOW_SETUP = "true";
+        try {
+            await processUntil("boring-command.cjs", async output=>output.includes("setup waiting"),130,["health/check","{}"]);
+            env.BORING_CHECK_FAIL_CLEANUP = "true";
+            const error = await processUntil("boring-command.cjs", async output=>output.includes("setup waiting"),1,["health/check","{}"]);
+            assert.equal(JSON.parse(error.replace("setup waiting\n", "")).error.code, "internal_error");
+            delete env.BORING_CHECK_SLOW_SETUP;
+            const activeError = await processUntil("boring-command.cjs", async output=>output.includes("command waiting"),1,["health/check",'{"wait":true}']);
+            assert.equal(JSON.parse(activeError.replace("command waiting\n", "")).error.code, "internal_error");
+        } finally { delete env.BORING_CHECK_SLOW_SETUP; delete env.BORING_CHECK_FAIL_CLEANUP; }
+        console.log(`All ${packages.length} tarballs verified: public APIs and declarations, documentation, CLI build, relocated HTTP/custom-server and controlled execution with cleanup, compiled durable PostgreSQL worker, event consumer, scheduler, schedule worker and command with SIGTERM cleanup, and npm ci --omit=dev without development packages.`);
     } finally { await closeDatabase(); rmSync(temporary, { recursive: true, force: true }); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

@@ -212,7 +212,7 @@ export function inspectProject(project: AnalyzedProject) {
         modules.set(entry.module, module);
     }
     return {
-        schemaVersion: 4 as const, apiDirectory: path(project.apiDirectory),
+        schemaVersion: 5 as const, apiDirectory: path(project.apiDirectory),
         configuration: project.sources.config ? { source: location(sourceFile(project.sources.config)), load: hook(project.sources.config, "load"), schema: schema(exported(checker, sourceFile(project.sources.config), "schema")!, sourceFile(project.sources.config)) } : null,
         lifecycle: { owner: "application" as const, cleanup: "setup.onClose" as const, executions: project.roles.filter(source => source.role === "execution").map(source => path(source.file)) },
         setup: hook(project.sources.setup, "setup"),
@@ -237,6 +237,25 @@ export function inspectProject(project: AnalyzedProject) {
                     return [...new Set(calls)].sort();
                 })() };
         }),
+        triggers: (["schedule", "event", "command"] as const).flatMap(kind => project.sources[`${kind}s`].map(job => {
+            const source = sourceFile(job.file);
+            return { kind, name: job.name, source: location(source), input: schema(exported(checker, source, kind === "command" ? "input" : "payload")!, source),
+                output: kind === "command" ? schema(exported(checker, source, "output")!, source) : null,
+                timing: value(source, "timing"), event: value(source, "event"), scheduleInput: kind === "schedule" ? value(source, "input") : null, timeoutMs: value(source, "timeoutMs"),
+                version: value(source, "version"), policy: value(source, "policy"), handler: hook(job.file),
+                operations: (() => {
+                    const calls: string[] = [];
+                    const visit = (node: ts.Node) => {
+                        if (ts.isCallExpression(node)) {
+                            const declaration = checker.getResolvedSignature(node)?.declaration;
+                            if (declaration && applicationRole(project.apiDirectory, declaration.getSourceFile().fileName).role === "facade") calls.push(node.expression.getText(source));
+                        }
+                        ts.forEachChild(node, visit);
+                    };
+                    visit(source);
+                    return [...new Set(calls)].sort();
+                })() };
+        })),
         routes,
         services: serviceSources(project.program, project.apiDirectory).map(service => ({ name: service.name, access: service.access,
             operations: service.operations.map(entry => ({ name: entry.name, access: entry.access,
@@ -271,6 +290,10 @@ export function formatInspection(inspection: Inspection): string {
     }
     lines.push("", "Jobs");
     for (const job of inspection.jobs) lines.push(`  ${job.name} — ${at(job.source)}`, `    Version: ${printValue(job.version)}; policy: ${printValue(job.policy)}`, `    Calls: ${job.operations.join(", ")}`);
+    for (const kind of ["schedule", "event", "command"] as const) {
+        lines.push("", `${kind}s`);
+        for (const entry of inspection.triggers.filter(entry => entry.kind === kind)) lines.push(`  ${entry.name} — ${at(entry.source)}`, `    Calls: ${entry.operations.join(", ")}`, `    Timing: ${printValue(entry.timing)}; event: ${printValue(entry.event)}`);
+    }
     lines.push("", "Services (available through ctx.services)");
     if (!inspection.services.length) lines.push("  none inferred from +setup");
     function printOperation(name: string, signatures: Inspection["services"][number]["operations"][number]["signatures"], source: SourceLocation) {

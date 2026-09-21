@@ -6,6 +6,41 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { it } from "node:test";
+import { analyzeProject, formatArchitectureDiagnostics } from "@boringapi/analyzer";
+
+it("drains setup and cleanup after early signals in every development trigger worker", async () => {
+    const root = mkdtempSync(join(tmpdir(), "boring-dev-startup-"));
+    const write = (name: string, content: string) => { const target = join(root, name); mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, content); };
+    const core = dirname(require.resolve("@boringapi/core/package.json"));
+    mkdirSync(join(root, "node_modules/@boringapi"), { recursive: true }); symlinkSync(core, join(root, "node_modules/@boringapi/core"));
+    for (const name of ["zod", "@types"]) symlinkSync(join(core, "node_modules", name), join(root, "node_modules", name));
+    write("tsconfig.json", JSON.stringify({ extends: "./.boring/tsconfig.json", compilerOptions: { strict: true, skipLibCheck: true, module: "commonjs", target: "ES2020" }, include: ["**/*.ts"] }));
+    write("api/+config.ts", 'import {z} from "zod"; export const schema=z.object({fail:z.boolean()}); export const load=(env:Readonly<Record<string,string|undefined>>)=>({fail:env.TEST_FAIL_CLEANUP==="true"});');
+    write("api/+setup.ts", `import type {SetupContext} from "./$types";
+export async function setup(ctx:SetupContext) {
+    ctx.onClose("test",async()=>{await new Promise(resolve=>setTimeout(resolve,50)); console.error("cleanup finished"); if(ctx.config.fail) throw new Error("cleanup failed");});
+    console.error("setup pending"); await new Promise(resolve=>setTimeout(resolve,100)); return {};
+}`);
+    try {
+        const project = analyzeProject(root, "api");
+        assert.equal(project.diagnostics.length, 0); assert.equal(formatArchitectureDiagnostics(project.architecture, root), "");
+        for (const fail of [false, true]) for (const mode of ["scheduler", "schedule", "event"]) {
+            const child = spawn(process.execPath, [join(__dirname, "../dist/worker.js"), root, join(root, "api"), "0", "", mode], {
+                cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, TEST_FAIL_CLEANUP: String(fail) },
+            });
+            let output = "", sent = false;
+            const exited = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", () => resolve()); });
+            const receive = (chunk: Buffer) => { output += chunk; if (!sent && output.includes("setup pending")) { sent = true; child.kill("SIGTERM"); } };
+            child.stdout.on("data", receive); child.stderr.on("data", receive);
+            const force = setTimeout(() => child.kill("SIGKILL"), 10000);
+            try { await exited; } finally { clearTimeout(force); }
+            assert.ok(sent, output); assert.equal(child.signalCode, null, output);
+            assert.equal(child.exitCode, fail ? 1 : 0, output);
+            assert.equal((output.match(/cleanup finished/g) ?? []).length, 1, output);
+            assert.doesNotMatch(output, /Configure ctx\./, "No execution starts after a signal during setup");
+        }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 async function response(port: number): Promise<unknown> {
     return new Promise((resolve, reject) => {
@@ -175,6 +210,114 @@ const worker=startDevServer(process.cwd(),"api",0,undefined,true);process.once("
     const waitFor=async(text:string)=>{const end=Date.now()+15000;while(Date.now()<end&&!output.includes(text)&&child.exitCode===null)await delay(25);assert.ok(output.includes(text),output);};
     try {
         await waitFor("job-run-one"); write("jobs/health/check/job.ts", declaration("job-run-two")); await waitFor("job-run-two");
+        assert.ok(output.indexOf("worker disposed")<output.indexOf("job-run-two"));assert.doesNotMatch(output,/Listening on port/);
+    } finally {
+        child.kill("SIGTERM"); const force=setTimeout(()=>child.kill("SIGKILL"),5000);await exited;clearTimeout(force);rmSync(root,{recursive:true,force:true});
+    }
+    assert.equal(child.signalCode,null); assert.equal((output.match(/worker disposed/g)??[]).length,2);
+});
+
+it("restarts a checked event process and drains resources after declaration changes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "boring-dev-event-"));
+    const write = (file: string, content: string) => { mkdirSync(dirname(join(root, file)), { recursive: true }); writeFileSync(join(root, file), content); };
+    const core = dirname(require.resolve("@boringapi/core/package.json"));
+    mkdirSync(join(root, "node_modules/@boringapi"), { recursive: true }); symlinkSync(core, join(root, "node_modules/@boringapi/core"));
+    symlinkSync(join(core, "node_modules/zod"), join(root, "node_modules/zod")); symlinkSync(join(core, "node_modules/@types"), join(root, "node_modules/@types"));
+    write("package.json", '{"name":"dev-jobs","private":true}');
+    write("tsconfig.json", JSON.stringify({ extends: "./.boring/tsconfig.json", compilerOptions: {strict:true,skipLibCheck:true,module:"commonjs",target:"ES2020"}, include:["**/*.ts"] }));
+    write("modules/health/facade.ts", 'import type {ExecutionContext} from "@boringapi/core"; export function createHealth() { return {run(ctx:ExecutionContext) {ctx.throwIfAborted(); return "ok";} }; }');
+    write("infra/queue.ts", `import type {TriggerAdapter} from "@boringapi/core";
+export function createQueue(): TriggerAdapter { let first = true; return {
+async acceptEvent(event) {return {id:event.id,deliveries:[]};}, async schedule(registration) {console.info((registration.input as {value:string}).value);return [];}, async enqueue() {}, async renew(){return true;}, async succeed(){return true;}, async fail(){return true;},
+async claim() {if(!first)return; first=false; return {id:"fixture",name:"@event/health/check",version:1,payload:{data:{},metadata:{id:"00000000-0000-4000-8000-000000000001",type:"health.check",version:1}},attempt:1,token:"fixture",origin:{identity:{kind:"machine",id:"test"},correlationId:"origin"},policy:{maxAttempts:1,retryDelayMs:10,timeoutMs:1000}};}
+}; }`);
+    write("api/+setup.ts", `import type {SetupContext} from "./$types"; import {createQueue} from "$infra/queue"; import {createHealth} from "$modules/health/facade";
+export function setup(ctx:SetupContext) {ctx.onClose("test", async()=>{await new Promise(r=>setTimeout(r,20));console.info("worker disposed");});
+ctx.events(createQueue(),{identity:{kind:"machine",id:"worker",permissions:[]}}); return {health:createHealth()};}`);
+    const declaration = (text: string) => `import {z} from "zod"; import type {EventHandler} from "./$types";
+export const event={type:"health.check",version:1} as const;
+export const payload=z.object({}); export const version=1; export const policy={maxAttempts:1,retryDelayMs:10,timeoutMs:1000};
+export const handler:EventHandler=async ctx=>{ctx.services.health.run(ctx.execution);console.info(${JSON.stringify(text)});};`;
+    write("events/health/check/event.ts", declaration("job-run-one"));
+    const child = spawn(process.execPath, ["-e", `const {startDevServer}=require(${JSON.stringify(join(__dirname, "../dist"))});
+const worker=startDevServer(process.cwd(),"api",0,undefined,"event");process.once("SIGTERM",()=>worker.close());`], {cwd:root,stdio:["ignore","pipe","pipe"]});
+    let output=""; child.stdout.on("data",chunk=>{output+=chunk;});child.stderr.on("data",chunk=>{output+=chunk;});
+    const exited=new Promise<void>(resolve=>child.once("close",()=>resolve()));
+    const waitFor=async(text:string)=>{const end=Date.now()+15000;while(Date.now()<end&&!output.includes(text)&&child.exitCode===null)await delay(25);assert.ok(output.includes(text),output);};
+    try {
+        await waitFor("job-run-one"); write("events/health/check/event.ts", declaration("job-run-two")); await waitFor("job-run-two");
+        assert.ok(output.indexOf("worker disposed")<output.indexOf("job-run-two"));assert.doesNotMatch(output,/Listening on port/);
+    } finally {
+        child.kill("SIGTERM"); const force=setTimeout(()=>child.kill("SIGKILL"),5000);await exited;clearTimeout(force);rmSync(root,{recursive:true,force:true});
+    }
+    assert.equal(child.signalCode,null); assert.equal((output.match(/worker disposed/g)??[]).length,2);
+});
+
+it("restarts a checked schedule process and drains resources after declaration changes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "boring-dev-schedule-"));
+    const write = (file: string, content: string) => { mkdirSync(dirname(join(root, file)), { recursive: true }); writeFileSync(join(root, file), content); };
+    const core = dirname(require.resolve("@boringapi/core/package.json"));
+    mkdirSync(join(root, "node_modules/@boringapi"), { recursive: true }); symlinkSync(core, join(root, "node_modules/@boringapi/core"));
+    symlinkSync(join(core, "node_modules/zod"), join(root, "node_modules/zod")); symlinkSync(join(core, "node_modules/@types"), join(root, "node_modules/@types"));
+    write("package.json", '{"name":"dev-jobs","private":true}');
+    write("tsconfig.json", JSON.stringify({ extends: "./.boring/tsconfig.json", compilerOptions: {strict:true,skipLibCheck:true,module:"commonjs",target:"ES2020"}, include:["**/*.ts"] }));
+    write("modules/health/facade.ts", 'import type {ExecutionContext} from "@boringapi/core"; export function createHealth() { return {run(ctx:ExecutionContext) {ctx.throwIfAborted(); return "ok";} }; }');
+    write("infra/queue.ts", `import type {TriggerAdapter} from "@boringapi/core";
+export function createQueue(): TriggerAdapter { let first = true; return {
+async acceptEvent(event) {return {id:event.id,deliveries:[]};}, async schedule(registration) {console.info((registration.input as {value:string}).value);return [];}, async enqueue() {}, async renew(){return true;}, async succeed(){return true;}, async fail(){return true;},
+async claim() {if(!first)return; first=false; return {id:"fixture",name:"@schedule/health/check",version:1,payload:{data:{},metadata:{id:"00000000-0000-4000-8000-000000000001",scheduledAt:0}},attempt:1,token:"fixture",origin:{identity:{kind:"machine",id:"test"},correlationId:"origin"},policy:{maxAttempts:1,retryDelayMs:10,timeoutMs:1000}};}
+}; }`);
+    write("api/+setup.ts", `import type {SetupContext} from "./$types"; import {createQueue} from "$infra/queue"; import {createHealth} from "$modules/health/facade";
+export function setup(ctx:SetupContext) {ctx.onClose("test", async()=>{await new Promise(r=>setTimeout(r,20));console.info("worker disposed");});
+ctx.schedules(createQueue(),{identity:{kind:"machine",id:"worker",permissions:[]}}); return {health:createHealth()};}`);
+    const declaration = (text: string) => `import {z} from "zod"; import type {ScheduleHandler} from "./$types";
+export const input={value:${JSON.stringify(text)}}; export const timing={startAt:0,everyMs:1000,missed:"latest",maxCatchUp:1,overlap:"skip"} as const;
+export const payload=z.object({}); export const version=1; export const policy={maxAttempts:1,retryDelayMs:10,timeoutMs:1000};
+export const handler:ScheduleHandler=async ctx=>{ctx.services.health.run(ctx.execution);console.info(${JSON.stringify(text)});};`;
+    write("schedules/health/check/schedule.ts", declaration("job-run-one"));
+    const child = spawn(process.execPath, ["-e", `const {startDevServer}=require(${JSON.stringify(join(__dirname, "../dist"))});
+const worker=startDevServer(process.cwd(),"api",0,undefined,"schedule");process.once("SIGTERM",()=>worker.close());`], {cwd:root,stdio:["ignore","pipe","pipe"]});
+    let output=""; child.stdout.on("data",chunk=>{output+=chunk;});child.stderr.on("data",chunk=>{output+=chunk;});
+    const exited=new Promise<void>(resolve=>child.once("close",()=>resolve()));
+    const waitFor=async(text:string)=>{const end=Date.now()+15000;while(Date.now()<end&&!output.includes(text)&&child.exitCode===null)await delay(25);assert.ok(output.includes(text),output);};
+    try {
+        await waitFor("job-run-one"); write("schedules/health/check/schedule.ts", declaration("job-run-two")); await waitFor("job-run-two");
+        assert.ok(output.indexOf("worker disposed")<output.indexOf("job-run-two"));assert.doesNotMatch(output,/Listening on port/);
+    } finally {
+        child.kill("SIGTERM"); const force=setTimeout(()=>child.kill("SIGKILL"),5000);await exited;clearTimeout(force);rmSync(root,{recursive:true,force:true});
+    }
+    assert.equal(child.signalCode,null); assert.equal((output.match(/worker disposed/g)??[]).length,2);
+});
+
+it("restarts a checked scheduler process and drains resources after declaration changes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "boring-dev-scheduler-"));
+    const write = (file: string, content: string) => { mkdirSync(dirname(join(root, file)), { recursive: true }); writeFileSync(join(root, file), content); };
+    const core = dirname(require.resolve("@boringapi/core/package.json"));
+    mkdirSync(join(root, "node_modules/@boringapi"), { recursive: true }); symlinkSync(core, join(root, "node_modules/@boringapi/core"));
+    symlinkSync(join(core, "node_modules/zod"), join(root, "node_modules/zod")); symlinkSync(join(core, "node_modules/@types"), join(root, "node_modules/@types"));
+    write("package.json", '{"name":"dev-jobs","private":true}');
+    write("tsconfig.json", JSON.stringify({ extends: "./.boring/tsconfig.json", compilerOptions: {strict:true,skipLibCheck:true,module:"commonjs",target:"ES2020"}, include:["**/*.ts"] }));
+    write("modules/health/facade.ts", 'import type {ExecutionContext} from "@boringapi/core"; export function createHealth() { return {run(ctx:ExecutionContext) {ctx.throwIfAborted(); return "ok";} }; }');
+    write("infra/queue.ts", `import type {TriggerAdapter} from "@boringapi/core";
+export function createQueue(): TriggerAdapter { let first = true; return {
+async acceptEvent(event) {return {id:event.id,deliveries:[]};}, async schedule(registration) {console.info((registration.input as {value:string}).value);return [];}, async enqueue() {}, async renew(){return true;}, async succeed(){return true;}, async fail(){return true;},
+async claim() {if(!first)return; first=false; return {id:"fixture",name:"@schedule/health/check",version:1,payload:{data:{},metadata:{id:"00000000-0000-4000-8000-000000000001",scheduledAt:0}},attempt:1,token:"fixture",origin:{identity:{kind:"machine",id:"test"},correlationId:"origin"},policy:{maxAttempts:1,retryDelayMs:10,timeoutMs:1000}};}
+}; }`);
+    write("api/+setup.ts", `import type {SetupContext} from "./$types"; import {createQueue} from "$infra/queue"; import {createHealth} from "$modules/health/facade";
+export function setup(ctx:SetupContext) {ctx.onClose("test", async()=>{await new Promise(r=>setTimeout(r,20));console.info("worker disposed");});
+ctx.schedules(createQueue(),{identity:{kind:"machine",id:"worker",permissions:[]}}); return {health:createHealth()};}`);
+    const declaration = (text: string) => `import {z} from "zod"; import type {ScheduleHandler} from "./$types";
+export const input={value:${JSON.stringify(text)}}; export const timing={startAt:0,everyMs:1000,missed:"latest",maxCatchUp:1,overlap:"skip"} as const;
+export const payload=z.object({}); export const version=1; export const policy={maxAttempts:1,retryDelayMs:10,timeoutMs:1000};
+export const handler:ScheduleHandler=async ctx=>{ctx.services.health.run(ctx.execution);console.info(${JSON.stringify(text)});};`;
+    write("schedules/health/check/schedule.ts", declaration("job-run-one"));
+    const child = spawn(process.execPath, ["-e", `const {startDevServer}=require(${JSON.stringify(join(__dirname, "../dist"))});
+const worker=startDevServer(process.cwd(),"api",0,undefined,"scheduler");process.once("SIGTERM",()=>worker.close());`], {cwd:root,stdio:["ignore","pipe","pipe"]});
+    let output=""; child.stdout.on("data",chunk=>{output+=chunk;});child.stderr.on("data",chunk=>{output+=chunk;});
+    const exited=new Promise<void>(resolve=>child.once("close",()=>resolve()));
+    const waitFor=async(text:string)=>{const end=Date.now()+15000;while(Date.now()<end&&!output.includes(text)&&child.exitCode===null)await delay(25);assert.ok(output.includes(text),output);};
+    try {
+        await waitFor("job-run-one"); write("schedules/health/check/schedule.ts", declaration("job-run-two")); await waitFor("job-run-two");
         assert.ok(output.indexOf("worker disposed")<output.indexOf("job-run-two"));assert.doesNotMatch(output,/Listening on port/);
     } finally {
         child.kill("SIGTERM"); const force=setTimeout(()=>child.kill("SIGKILL"),5000);await exited;clearTimeout(force);rmSync(root,{recursive:true,force:true});

@@ -1,7 +1,9 @@
 import { existsSync, readFileSync, statSync } from "fs";
+import type { Server } from "http";
 import { isAbsolute, join, resolve } from "path";
 import ts from "typescript";
 import { BoringApi } from "@boringapi/core";
+import type { Application } from "@boringapi/core";
 import { formatHost, inside, readConfiguration } from "@boringapi/compiler";
 
 export interface StartOptions {
@@ -10,15 +12,26 @@ export interface StartOptions {
     projectFile?: string;
 }
 
+export interface StartedProject<Services extends object = Record<string, unknown>> {
+    readonly application: Application<Services>;
+    readonly server: Server;
+}
+
 /** Start the compiled worker owner without opening an HTTP listener. */
-export async function startWorker(root: string, options: StartOptions = {}) {
-    const application = await new BoringApi().createApp(resolveStartDirectory(root, options));
+export async function startWorker<Services extends object = Record<string, unknown>>(root: string, options: StartOptions = {}): Promise<Application<Services>> {
+    const application = await new BoringApi().createApp<Services>(resolveStartDirectory(root, options));
     return application;
 }
 
-/** Development convenience for launching an existing compiled application. */
-export function startProject(root: string, options: StartOptions = {}, port = 4040) {
-    return new BoringApi().listen(resolveStartDirectory(root, options), port);
+/** Tooling convenience that leaves the application and native listener with its caller. */
+export async function startProject<Services extends object = Record<string, unknown>>(
+    root: string, options: StartOptions = {}, port = 4040, onRuntimeError?: (error: Error) => void,
+): Promise<StartedProject<Services>> {
+    const application = await startWorker<Services>(root, options);
+    const server = await application.listen(port, undefined, onRuntimeError);
+    const address = server.address();
+    console.info(`Listening on port ${typeof address === "object" && address ? address.port : port}`);
+    return { application, server };
 }
 
 function metadata(file: string): Record<string, unknown> {

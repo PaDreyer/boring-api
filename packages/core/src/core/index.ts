@@ -20,12 +20,20 @@ function parseInput(schema: ZodTypeAny | undefined, value: unknown, field: strin
     }
 }
 
-type RequestState = { ctx: Context; execution: Execution; finish: () => void };
+type RequestState = {
+    ctx: Context;
+    execution: Execution;
+    routePattern: string;
+    fail: (error: unknown, event: "http.error" | "http.error_hook_failed", statusCode: number) => void;
+    finish: () => void;
+};
 
 function registerRoute(app: Express, route: Route, auth: AuthModule | undefined, handleError: (error: unknown, req: Request, res: Response) => Promise<void>) {
     const { module: mod } = route;
     const run = async (req: Request, res: Response, next: NextFunction) => {
-        const { ctx, execution, finish } = res.locals.boringState as RequestState;
+        const state = res.locals.boringState as RequestState;
+        state.routePattern = route.path;
+        const { ctx, execution, finish } = state;
         res.locals.boringScope = route.scope;
         try {
             ctx.set("body", req.body);
@@ -96,14 +104,19 @@ export class BoringApi {
             if (setupModule) setup.assign(await setupModule.setup(setup));
             setupLifecycle(setup).seal();
         } catch (error) {
-            try { await setupLifecycle(setup).dispose(); } catch (cleanup) { throw new LifecycleError("Application startup and cleanup failed", [error, cleanup]); }
+            const failures: unknown[] = [error];
+            const disposal = setupLifecycle(setup).dispose();
+            try { await disposal.bounded; } catch (cleanup) { failures.push(cleanup); }
+            try { await disposal.settled; } catch (cleanup) { failures.push(cleanup); }
+            if (failures.length > 1) throw new LifecycleError("Application startup and cleanup failed", failures);
             throw error;
         }
 
         const handleError = async (error: unknown, req: Request, res: Response): Promise<void> => {
-            if (res.headersSent || res.destroyed) return;
             const httpError = asHttpError(error);
-            if (httpError.status >= 500) setup.logger.error(error);
+            const state = res.locals.boringState as RequestState | undefined;
+            if (httpError.status >= 500) state?.fail(error, "http.error", httpError.status);
+            if (res.headersSent || res.destroyed) return;
             res.status(httpError.status);
             const scope = (res.locals.boringScope as RouteScope | undefined) ?? rootScope;
             const hook = findErrorTemplate(scope.errors, httpError.status);
@@ -118,7 +131,7 @@ export class BoringApi {
                     if (returned !== undefined) ctx.payload = returned;
                     if (ctx.has("response_payload")) { res.send(ctx.payload); return; }
                 } catch (hookError) {
-                    setup.logger.error(hookError);
+                    state?.fail(hookError, "http.error_hook_failed", 500);
                     res.status(500);
                 }
             }
@@ -137,22 +150,35 @@ export class BoringApi {
             execution.context.signal.addEventListener("abort", cancelInput, { once: true });
             let handled = false;
             let finished = false;
+            let failed = false;
+            let state!: RequestState;
+            const fail = (error: unknown, event: "http.error" | "http.error_hook_failed", statusCode: number) => {
+                failed = true;
+                setup.logger.error(error, event, execution.context.correlationId, {
+                    method: req.method.toUpperCase(), route: state.routePattern, statusCode,
+                    errorKind: error instanceof ExecutionError ? "execution" : error instanceof HttpError ? "http" : "unexpected",
+                    durationMs: Number((performance.now() - start).toFixed(3)),
+                });
+            };
             const settle = () => {
                 if (finished || !handled || !(res.writableFinished || res.destroyed)) return;
                 finished = true;
                 res.off("close", disconnected);
                 res.off("finish", settle);
                 execution.context.signal.removeEventListener("abort", cancelInput);
-                application.finish(execution);
+                const reason = execution.context.signal.aborted ? execution.context.signal.reason : undefined;
+                const status = reason instanceof ExecutionError && ["cancelled", "deadline"].includes(reason.code) ? "cancelled" : failed || res.statusCode >= 500 ? "error" : "ok";
+                application.finish(execution, status);
             };
             const disconnected = () => {
                 if (!res.writableFinished) execution.abort(new ExecutionError("cancelled", "HTTP client disconnected"));
                 settle();
             };
+            state = { ctx, execution, routePattern: "<unmatched>", fail, finish() { handled = true; settle(); } };
             res.once("close", disconnected);
             res.once("finish", settle);
-            res.locals.boringState = { ctx, execution, finish() { handled = true; settle(); } } satisfies RequestState;
-            res.once("finish", () => setup.logger.http(req.method, req.path, res.statusCode, performance.now() - start));
+            res.locals.boringState = state;
+            res.once("finish", () => setup.logger.http(req.method, state.routePattern, res.statusCode, performance.now() - start, execution.context.correlationId));
             next();
         });
         app.use(express.json());

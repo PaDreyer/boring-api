@@ -6,6 +6,8 @@ An application owns its dependencies. An execution owns its identity and lifetim
 HTTP, server pages and controlled non-HTTP invocations call the same injected
 facades. [Durable jobs](jobs.md) use this lifecycle, including queue claims and confirmations.
 [Schedules, event consumers and commands](triggers.md) reuse the same owner, contexts and durable delivery protocol.
+[Reliable publication](publications.md) and the [operational contract](operations.md)
+extend that ownership through publisher delivery, telemetry flush and dependency readiness.
 
 ## Configuration and construction
 
@@ -39,20 +41,24 @@ in `+setup`, which runs once for each application instance:
 export function setup(ctx: SetupContext) {
     const database = createDatabase({ connectionString: ctx.config.databaseUrl });
     ctx.onClose("PostgreSQL", () => database.close());
+    ctx.readiness("PostgreSQL", () => database.ready());
     return { orders: createOrders(database.orders) };
 }
 ```
 
 Register cleanup **immediately after acquisition**, before the next fallible step.
 An adapter must clean up resources it acquires before its constructor/factory can
-return. Await readiness probes in setup when the application requires them; creating
-a lazy database pool alone does not prove database availability. Migrations remain
-explicit actions. The fullstack reference uses a lazy pool and does not run a probe
-or migration on startup.
+return. Register required-infrastructure checks with `ctx.readiness`; creating a
+lazy database pool alone does not prove database availability. Probes run only when
+`application.readiness()` is called and have bounded timeouts. Migrations remain
+explicit actions. The fullstack reference probes PostgreSQL without migrating at startup.
 
 Setup may expose only the existing checked facade/page operations and data. Cleanup
 callbacks and adapters are never services. Setup is sealed after startup; late
-registration/writes fail. HTTP gets only the setup logger view, not ownership APIs.
+registration/writes fail. The framework logger is separate from the returned service
+namespace: an application may expose a service named `logger` without replacing
+`ctx.logger`, `requestContext.setup.logger` or internal HTTP telemetry. HTTP gets only
+the setup logger view, not ownership APIs.
 Each `createApp` has independent configuration, services and cleanup registrations.
 
 On setup failure Core awaits all registered cleanups, in reverse registration order.
@@ -76,6 +82,8 @@ const application = await new BoringApi().createApp<Services>(absoluteApiDirecto
 const server = await application.listen(4040);
 // application.http is the Express adapter for mounting into a parent Express app.
 // await application.listen(4040, parent) owns that parent's HTTP listener too.
+// Process owners can observe runtime errors with the third argument; Core begins
+// owned shutdown before invoking the observer.
 await application.close();
 ```
 
@@ -83,6 +91,12 @@ await application.close();
 listener, returning the same application handle. Listener startup failure disposes
 its application. The returned `Server` from `application.listen` supports address
 inspection; shutdown belongs to `application.close`, not `server.close` alone.
+After listener startup, Core retains an internal error listener until server close,
+records every distinct runtime error by object identity and atomically initiates
+application shutdown. A third-argument callback is an optional notification hook;
+its errors are also retained but it does not own shutdown. Long-running process
+owners retain the listener until `application.closed` settles. Generated, CLI and
+development processes implement that policy.
 If shutdown overlaps a pending listener start, `listen` rejects instead of leaving
 startup pending. It joins the same shutdown promise: successful shutdown produces
 `ExecutionError("unavailable")`; cleanup/timeout failures preserve both causes in
@@ -106,16 +120,27 @@ Shutdown is ordered:
    signal cooperative cancellation on every remaining execution.
 3. Wait for actual execution settlement, including awaited `finally` blocks and
    HTTP error hooks. An early HTTP response does not end a still-running handler.
-4. Close remaining owned HTTP sockets, then await registered cleanups in reverse
-   order. Continue after failures. Mark the application closed.
+4. Close remaining owned HTTP sockets, flush the operational adapter, then await
+   registered cleanups in reverse order. Continue after failures. Mark the
+   application closed.
+
+`health()`, `readiness()` and `metrics()` expose the application-owned operational
+view without opening a listener. See [operations.md](operations.md) for liveness,
+probe, label-cardinality and adapter-flush guarantees.
 
 Concurrent and repeated `close()` calls share exactly one promise, including its
 failure. After `shutdownTimeoutMs`, that promise rejects with `ShutdownTimeoutError`.
+That shared promise is published before listener shutdown or user cleanup can invoke
+reentrant code.
 **Resources remain owned while execution or disposal is still running.** After
 calling close, `application.closed` observes eventual completion and any cleanup
 failures. Timing out does not forcibly stop JavaScript, issue a database rollback
 from another task, free a pool under active queries, or terminate the process.
-The bootstrap/operator owns a final process-kill policy if work never cooperates.
+Generated and custom process bootstraps keep a referenced Node handle from bootstrap
+entry through final lifecycle settlement: an unresolved setup or cleanup Promise alone
+does not keep the process alive. Distinct bounded-wait and eventual-cleanup failures
+are both retained; the same error object is not duplicated. The bootstrap/operator
+owns a final process-kill policy if work never cooperates.
 All timeouts are positive integer milliseconds, at most 2,147,483,647; shutdown
 timeout must be at least the grace period.
 
@@ -197,7 +222,7 @@ runtimes must add idempotency/reconciliation where required.
 ## Static enforcement and migration
 
 The common scanner owns root `+config`; the role model owns `executions/`. Checks,
-inspection v5, typegen, generated consumers, watching and portable builds all use
+inspection v6, typegen, generated consumers, watching and portable builds all use
 these conventions. Execution entries import public schemas, generated types, Core
 and Zod, and call injected operations. They cannot import private services, facades
 or concrete adapters. Source includes unused execution files. Configuration/identity
@@ -222,12 +247,14 @@ This is a **breaking platform minor release on 0.x**, not a patch:
 
 - `createApp` returns an application owner; mount `.http` and close the owner.
   `BoringApi.listen` also returns the owner. Wire signals in custom bootstraps.
+- `@boringapi/build` `startProject` now returns `{ application, server }`; tooling
+  keeps both owners and closes/awaits `application` through final settlement.
 - Move configuration parsing into `+config`, read `ctx.config` in setup and register
   acquired resources with `ctx.onClose` immediately.
 - Authentication returns explicit user/machine identities. Pass `ctx.execution` to
   operations needing identity/lifetime; non-HTTP callers use `application.execute`.
 - Replace business `HttpError` and status-based permission assertions with domain
-  error codes. Regenerate types and update inspection readers for schema version 5.
+  error codes. Regenerate types and update inspection readers for schema version 6.
 - Move the removed `modules/<name>/repository.ts` convention into type-only
   `ports/<name>.ts`. Business rules stay in `service.ts`/`services/`, and concrete
   storage stays in `infra/`. There is no extra repository implementation layer.

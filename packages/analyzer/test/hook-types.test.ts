@@ -1,6 +1,6 @@
 import { formatHost } from "@boringapi/compiler";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { it } from "node:test";
@@ -14,7 +14,7 @@ function write(root: string, file: string, source: string) {
     writeFileSync(join(root, file), source);
 }
 function fixture() {
-    const root = mkdtempSync(join(tmpdir(), "boring-hook-types-"));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "boring-hook-types-")));
     write(root, "package.json", '{"private":true}');
     write(root, "tsconfig.json", JSON.stringify({
         extends: "./.boring/tsconfig.json",

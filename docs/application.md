@@ -177,7 +177,7 @@ reserved `+` files.
 | `modules/<name>/facade.ts` | Expose operations with explicit inputs and actor identity. Check access for every caller and coordinate private services, transactions and dependencies. |
 | `modules/<name>/schemas.ts` | Share Zod schemas and inferred data types. Keep contracts independent of server clients so browser code can reuse them later. |
 | `modules/<name>/service.ts` | Implement domain rules and use cases without HTTP or database driver imports. Keep this file private to its module. |
-| `modules/<name>/ports/storage.ts` | Define the narrow storage port needed by the service when the domain persists data. Export types only. Setup and adapters import this contract directly; other modules cannot. |
+| `modules/<name>/ports/storage.ts`, `ports/publications.ts` | Define the narrow storage and effect ports needed by the service. Export types only. Setup and adapters import these contracts directly; other modules cannot. |
 | `facade/`, `services/`, `schemas/`, `ports/` inside the module | Split the corresponding role into named files; every part retains that role’s restrictions. Generic `internal/` and helper files are rejected. |
 | `infra/` | Implement storage ports and external clients. Keep SQL and SDK calls out of the facade and service. |
 | `+setup.ts` | Create infrastructure and inject it into facades once per application. Return facades through the existing `ctx.services` contract. |
@@ -248,12 +248,19 @@ globals. Its in-memory adapter loses data on restart and is not a production
 database integration. For persistent storage and web interfaces, see the
 [database and web patterns](web.md).
 
+When a committed operation must emit an event, add a domain-named publication port
+and include it in the facade-owned transaction unit. The service invokes that port
+beside its business writes; the infrastructure adapter stages the intent with the
+same database client. Do not publish from a route, entry declaration, service
+global or post-commit callback. See [reliable publication](publications.md).
+
 ## Checked import boundaries
 
 `boring check` enforces these rules for every application. There is no disabling
 flag or compatibility mode. In addition to the consumer's `tsconfig.json` files,
 the command includes all TypeScript/JavaScript source in the selected API
-directory and its sibling `modules`, `infra`, `jobs`, `executions`, `web/client` and `web/server` directories. Unused
+directory and its sibling `modules`, `infra`, `jobs`, `schedules`, `events`,
+`commands`, `executions`, `web/client` and `web/server` directories. Unused
 modules are checked too. It does not execute setup, hooks, routes or dependencies.
 
 | Source | Allowed dependencies |

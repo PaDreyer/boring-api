@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { it } from "node:test";
@@ -7,7 +7,7 @@ import ts from "typescript";
 import { analyzeProject, inspectProject } from "../src";
 
 function project(files: Record<string, string>, run: (result: ReturnType<typeof analyzeProject>, root: string) => void) {
-    const root = mkdtempSync(join(tmpdir(), "boring-boundary-regression-"));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "boring-boundary-regression-")));
     try {
         const sources = {
             "package.json": '{"name":"boundary-regression","private":true}',
@@ -118,7 +118,7 @@ it("accepts inline type imports and exports across ports, adapters and setup", (
         "api/+setup.ts": 'import type { SetupContext } from "@boringapi/core"; import { type Store } from "../modules/orders/ports/storage"; import { create } from "../modules/orders/facade"; import { store } from "../infra/store"; export function setup(ctx: SetupContext) { const port: Store = store; ctx.assign({ orders: create(port) }); ctx.set("name", "ok"); return { orders: create(port) }; }',
     }, result => {
         assert.deepEqual(result.architecture.map(error => error.message), []);
-        assert.equal(inspectProject(result).schemaVersion, 5);
+        assert.equal(inspectProject(result).schemaVersion, 6);
     });
 });
 
@@ -260,7 +260,7 @@ export function create(runner: Runner<ExecutionContext>) {
 }`,
     }, result => {
         assert.deepEqual(result.architecture.map(error => error.message), []);
-        assert.equal(inspectProject(result).schemaVersion, 5);
+        assert.equal(inspectProject(result).schemaVersion, 6);
     });
 });
 

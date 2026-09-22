@@ -2,7 +2,8 @@
 
 This is the structural contract for the shared application model. It applies to
 the selected API's sibling directories. The [lifecycle contract](lifecycle.md) defines
-configuration, ownership and execution; [durable jobs](jobs.md) share that model.
+configuration, ownership and execution; [durable jobs](jobs.md), [reliable
+publication](publications.md) and [operations](operations.md) share that model.
 
 | Role and files | Imports and exports | Calls and lifetime |
 | --- | --- | --- |
@@ -16,7 +17,7 @@ configuration, ownership and execution; [durable jobs](jobs.md) share that model
 | `modules/<name>/facade.ts`, `facade/**/*.ts` | Own services, ports, schemas, facade parts; other public facades/schemas; Core and Zod | Public operations coordinate services, access and transactions; dependencies live for the app, execution context is the first argument |
 | `service.ts`, `services/**/*.ts` | Schemas, own port types, Zod and Core types | Only operations of the owning facade call exported services; no calls during module loading or factory composition; no peer-service dependencies |
 | `schemas.ts`, `schemas/**/*.ts` | Schemas, Zod, Core types | Export data and Zod schemas, not executable helpers; no infrastructure or service behavior |
-| `ports/**/*.ts` | Schemas and own port types | Export types only; describe storage, other effects and transaction callbacks |
+| `ports/**/*.ts` | Schemas and own port types | Export types only; describe storage, publication, other effects and transaction callbacks |
 | `infra/**/*` | Infrastructure, public schemas, port types, packages and Node | Implement ports, construct resources; never call business operations |
 | `web/server/**/*` | Pages, public facade types/operations, schemas, Core, Zod | Presentation with injected facades; data per call |
 | `web/client/**/*` | Browser source, public schemas, browser packages and Core client | Browser transport; no server capabilities |

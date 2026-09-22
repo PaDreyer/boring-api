@@ -1,10 +1,11 @@
-import { LifecycleError, type ExecutionContext } from "@boringapi/core";
+import { eventPublication, LifecycleError, type ExecutionContext } from "@boringapi/core";
 import { createHash, randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import type { PoolClient, PoolConfig } from "pg";
 import type { OrderDatabase, OrderStore } from "$modules/orders/ports/storage";
+import type { OrderPublications } from "$modules/orders/ports/publications";
 import { order } from "$modules/orders/schemas";
-import { createPostgresJobs } from "@boringapi/jobs-postgres";
+import { createPostgresJobs, stagePostgresEvent } from "@boringapi/jobs-postgres";
 import { migrations } from "./migrations";
 
 export function createDatabase(config: PoolConfig) {
@@ -18,6 +19,7 @@ export function createDatabase(config: PoolConfig) {
         try {
             execution?.throwIfAborted();
             await client.query("BEGIN");
+            await client.query("SET LOCAL synchronous_commit = on");
             const result = await operation(client);
             execution?.throwIfAborted();
             await client.query("COMMIT");
@@ -49,14 +51,27 @@ export function createDatabase(config: PoolConfig) {
                     const result = await client.query("SELECT id, item, quantity FROM orders WHERE id = $1", [id]);
                     return result.rows[0] ? order.parse(result.rows[0]) : undefined;
                 },
+                async observeCreated(eventId, value, actorId, correlationId) {
+                    await client.query(`INSERT INTO order_created_projections (event_id, order_id, item, quantity, observed_by, correlation_id)
+                        VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (event_id) DO NOTHING`,
+                    [eventId, value.id, value.item, value.quantity, actorId, correlationId]);
+                },
             };
-            return operation(store);
+            const publications: OrderPublications = {
+                async created(value) {
+                    const publication = eventPublication(execution, { id: value.id, type: "orders.created", version: 1, payload: value },
+                        { maxAttempts: 10, retryDelayMs: 1000, timeoutMs: 30000 });
+                    await stagePostgresEvent(client, publication);
+                },
+            };
+            return operation({ store, publications });
         }, execution),
     };
 
     return {
         orders: database,
         jobs: createPostgresJobs(pool),
+        async ready(): Promise<void> { await pool.query("SELECT 1"); },
         close: () => pool.end(),
         async migrate(): Promise<void> {
             await transaction(async client => {

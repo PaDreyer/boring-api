@@ -37,6 +37,7 @@ it("shares orders authorization, transactions, rollback, cancellation and pool o
             return {
                 async query(sql: string, values: unknown[] = []) {
                     if (sql === "BEGIN") trace.push("begin");
+                    else if (sql === "SET LOCAL synchronous_commit = on") trace.push("sync");
                     else if (sql.startsWith("INSERT INTO orders")) {
                         trace.push("insert");
                         pending = { id: values[0] as string, item: values[1] as string, quantity: values[2] as number };
@@ -44,6 +45,9 @@ it("shares orders authorization, transactions, rollback, cancellation and pool o
                         trace.push("audit");
                         if (pending?.item === "fail-audit" || pending?.item === "fail-rollback") throw new Error("audit rejected");
                         if (pending?.item === "cancel-audit") { enteredAudit(); await auditRelease; }
+                    } else if (sql.startsWith("INSERT INTO boring_jobs")) {
+                        trace.push("publication");
+                        return { rows: [{ id: values[0] }], rowCount: 1 };
                     } else if (sql.startsWith("SELECT id")) return { rows: records.has(values[0] as string) ? [records.get(values[0] as string)] : [] };
                     else if (sql === "COMMIT") { trace.push("commit"); if (pending) records.set(pending.id, pending); }
                     else if (sql === "ROLLBACK") {
@@ -75,9 +79,9 @@ it("shares orders authorization, transactions, rollback, cancellation and pool o
         });
         const viaHttp = await post("HTTP"); assert.equal(viaHttp.status, 201);
         const httpOrder = await viaHttp.json() as Order;
-        assert.deepEqual(trace.splice(0), ["begin", "insert", "audit", "commit", "release"]);
+        assert.deepEqual(trace.splice(0), ["begin", "sync", "insert", "audit", "publication", "commit", "release"]);
         const controlled = await createOrder(owner, actor, { item: "controlled", quantity: 2 });
-        assert.deepEqual(trace.splice(0), ["begin", "insert", "audit", "commit", "release"]);
+        assert.deepEqual(trace.splice(0), ["begin", "sync", "insert", "audit", "publication", "commit", "release"]);
         assert.deepEqual(await owner.execute({ identity: actor }, ctx => ctx.services.orders.get(ctx.execution, httpOrder.id)), httpOrder);
         trace.length = 0;
         assert.equal((await post("denied", false)).status, 401);
@@ -88,15 +92,15 @@ it("shares orders authorization, transactions, rollback, cancellation and pool o
         assert.equal(deniedHttp.status, 403);
         assert.deepEqual(trace, []);
         assert.equal((await post("fail-audit")).status, 500);
-        assert.deepEqual(trace.splice(0), ["begin", "insert", "audit", "rollback", "release"]);
+        assert.deepEqual(trace.splice(0), ["begin", "sync", "insert", "audit", "rollback", "release"]);
         await assert.rejects(createOrder(owner, actor, { item: "fail-audit", quantity: 1 }), /audit rejected/);
-        assert.deepEqual(trace.splice(0), ["begin", "insert", "audit", "rollback", "release"]);
+        assert.deepEqual(trace.splice(0), ["begin", "sync", "insert", "audit", "rollback", "release"]);
         await assert.rejects(createOrder(owner, actor, { item: "fail-rollback", quantity: 1 }), error => {
             assert.ok(error instanceof LifecycleError);
             assert.deepEqual(error.errors.map(cause => (cause as Error).message), ["audit rejected", "rollback rejected"]);
             return true;
         });
-        assert.deepEqual(trace.splice(0), ["begin", "insert", "audit", "rollback", "discard"]);
+        assert.deepEqual(trace.splice(0), ["begin", "sync", "insert", "audit", "rollback", "discard"]);
         assert.equal(records.size, 2); assert.ok(records.has(controlled.id));
         const work = createOrder(owner, actor, { item: "cancel-audit", quantity: 1 });
         const rejected = assert.rejects(work, error => error instanceof ExecutionError && error.code === "cancelled");
@@ -105,7 +109,7 @@ it("shares orders authorization, transactions, rollback, cancellation and pool o
         await new Promise(resolve => setTimeout(resolve, 30));
         assert.equal(closed, 0); assert.equal(clients, 1);
         releaseAudit(); await rejected; await closing;
-        assert.deepEqual(trace, ["begin", "insert", "audit", "rollback", "release", "pool.close"]);
+        assert.deepEqual(trace, ["begin", "sync", "insert", "audit", "rollback", "release", "pool.close"]);
         assert.equal(records.size, 2); assert.equal(closed, 1);
     } finally {
         releaseAudit();

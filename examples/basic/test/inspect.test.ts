@@ -15,7 +15,7 @@ function inspect(...args: string[]): string {
 
 it("locates existing order operations, schemas, permissions and inherited example hooks", () => {
     const result = JSON.parse(inspect("--json"));
-    assert.equal(result.schemaVersion, 5);
+    assert.equal(result.schemaVersion, 6);
     const orders = result.services.find((service: { name: string }) => service.name === "orders")!;
     assert.deepEqual(orders.operations.map((operation: { access: string }) => operation.access), ["ctx.services.orders.create", "ctx.services.orders.get"]);
     assert.ok(orders.operations.every((operation: { source: { file: string } }) => operation.source.file === "modules/orders/facade.ts"));
@@ -34,4 +34,3 @@ it("locates existing order operations, schemas, permissions and inherited exampl
     assert.match(readable, /authorization: "orders:create"/);
     assert.ok(!JSON.stringify(result).includes(application));
 });
-

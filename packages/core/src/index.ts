@@ -14,6 +14,8 @@ export type { ExecutionContext, ExecutionIdentity, ExecutionOptions } from "./co
 export { ExecutionError } from "./core/execution";
 export { LifecycleError, ShutdownTimeoutError } from "./core/lifecycle";
 export type { Application, ApplicationOptions, ExecutionScope } from "./core/lifecycle";
+export type { OperationalAdapter, OperationalOptions, OperationalRecord, OperationalAttributes, OperationalValue,
+    ReadinessProbeOptions, HealthReport, ReadinessReport, MetricSnapshot, ExecutionKind } from "./core/operations";
 export { JobError } from "./core/jobs";
 export type { JsonValue, JobAdapter, JobBindings, JobClaim, JobContext, JobDeclaration, JobDelivery, JobFailure, JobOptions,
     JobOrigin, JobPolicy, JobPort, JobReceipt, StoredJob, WorkerOptions, JobAttemptResult } from "./core/jobs";
@@ -21,3 +23,5 @@ export type { JsonValue, JobAdapter, JobBindings, JobClaim, JobContext, JobDecla
 export { commandFailure, TriggerError, scheduleDue, triggerId, validateScheduleTiming } from "./core/triggers";
 export type { DeliveryKind, ScheduleTiming, ScheduleOccurrence, ScheduleContext, ScheduleDeclaration, EventMetadata, EventContext, EventDeclaration,
     CommandContext, CommandDeclaration, TriggerOptions, AcceptedEvent, EventReceipt, ScheduleRegistration, TriggerAdapter } from "./core/triggers";
+export { eventPublication, PublicationError, publicationName, validateEventPublication } from "./core/publications";
+export type { EventPublication, PublishedEvent } from "./core/publications";

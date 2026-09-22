@@ -13,7 +13,9 @@
     "web": "vite --config web/vite.config.mjs",
     "migrate": "ts-node -r ./register-source.ts migrate.ts",
     "worker": "node dist/boring-worker.cjs",
-    "dev:worker": "boring dev --worker"
+    "dev:worker": "boring dev --worker",
+    "publisher": "node dist/boring-publisher.cjs",
+    "dev:publisher": "boring dev --publisher"
   },
   "dependencies": {
     "@boringapi/core": "workspace:^",

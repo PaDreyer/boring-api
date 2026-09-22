@@ -2,7 +2,8 @@ import { randomUUID } from "crypto";
 import type { ZodTypeAny } from "zod";
 import { ApplicationError } from "./errors";
 import { assertExecution, duration, ExecutionContext, ExecutionIdentity, identitySnapshot, snapshot } from "./execution";
-import type { Application } from "./lifecycle";
+import type { ApplicationRuntime } from "./lifecycle";
+import type { ExecutionKind } from "./operations";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export interface JobPolicy { readonly maxAttempts: number; readonly retryDelayMs: number; readonly timeoutMs: number; }
@@ -140,7 +141,7 @@ export class JobRuntime {
             } });
         } });
     }
-    async attempt(application: Application<any>, options: WorkerOptions): Promise<JobAttemptResult | undefined> {
+    async attempt(application: ApplicationRuntime<any>, options: WorkerOptions, executionKind: ExecutionKind = "job"): Promise<JobAttemptResult | undefined> {
         if (!this.adapter || !this.identity) throw new Error("Configure jobs with ctx.jobs(adapter, { identity }) in setup");
         const adapter = this.adapter;
         const leaseMs = duration(options.leaseMs ?? 30000, "Job lease");
@@ -178,7 +179,7 @@ export class JobRuntime {
                     !origin.identity.id || typeof origin.correlationId !== "string" || !origin.correlationId ||
                     origin.tenantId !== undefined && (typeof origin.tenantId !== "string" || !origin.tenantId)) throw new JobError("invalid_metadata", "Invalid stored origin");
                 // Each delivery uses current configured grants, never permissions from the payload or origin.
-                await application.execute({ identity: this.identity, tenantId: origin.tenantId,
+                await application.executeObserved(executionKind, { identity: this.identity, tenantId: origin.tenantId,
                     correlationId: randomUUID(), signal: cancel.signal, timeoutMs: Math.min(claim.policy.timeoutMs, declaration.policy.timeoutMs) }, async ({ execution, services }) => {
                     let payload: unknown;
                     try { payload = jobJson(await declaration.payload.parseAsync(jobJson(claim.payload))); }
@@ -186,7 +187,7 @@ export class JobRuntime {
                     execution.throwIfAborted();
                     await declaration.handler(Object.freeze({ execution, services, payload,
                         delivery: snapshot({ id: claim.id, name: claim.name, attempt: claim.attempt, attemptId: execution.correlationId, origin }) }));
-                });
+                }, [origin.correlationId], { deliveryId: claim.id, attempt: claim.attempt });
             } catch (error) {
                 failure = { code: error instanceof JobError || error instanceof ApplicationError ? error.code : "attempt_failed",
                     message: failureMessage(error) };

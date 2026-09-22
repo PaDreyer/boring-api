@@ -57,6 +57,8 @@ The combined server serves the SPA at http://localhost:4041 and the API/MPA at
 their existing paths. `PORT` changes this port; `WEB_DIST` can select relocated
 static assets. Keep the compiled server output and generated static assets
 together. Apply migrations explicitly before starting, including in deployment.
+The custom server also exposes `GET /health/live`, `GET /health/ready` and
+`GET /metrics`. Readiness probes PostgreSQL; liveness does not.
 The build contains the SQL migration list, so migrations can also run with
 `node examples/fullstack/dist/migrate.js` after compilation.
 `node dist/boring-start.cjs` starts only the API; use this example's server for combined static
@@ -85,12 +87,14 @@ runs directly with Node; the build has rewritten its aliases to relative paths.
   migrations. The runner checks applied checksums and runs pending SQL inside
   a transaction guarded by a database lock. It never runs on normal requests.
 - `infra/db/database.ts` owns the pool and parameterized SQL. It exposes a narrow
-  typed storage port and validates row shapes with the public Zod schema.
+  typed storage port, stages publication intents on the current client and validates
+  row shapes with the public Zod schema.
 - `modules/orders/ports/storage.ts` defines the storage and transaction ports;
   `modules/orders/service.ts` validates inputs and implements order creation,
   audit writing and lookup without importing `pg`.
 - `modules/orders/facade.ts` checks permissions and chooses the atomic transaction:
-  order and audit event succeed or fail together. Actor identity is passed per
+  order, audit event, idempotency record and `orders.created` intent succeed or fail
+  together. Actor identity is passed per
   call and never retained in the shared facade.
 - Setup builds one orders facade, then injects it into the page renderer. HTTP
   routes use the same instance through `ctx.services`. Page rendering escapes
@@ -106,6 +110,9 @@ set `BORING_TEST_DATABASE_URL` to an isolated database and run `pnpm test`. The 
 creates and removes a random schema, never the application's existing tables.
 It covers migration locking/checksums, persistence after reopening connections,
 transaction rollback, API/MPA reads, HTML escaping, validation and authentication.
+The publication test also terminates real child processes after business commit and
+after event acceptance, proves fresh-process recovery, competing publisher fencing,
+stable deduplication and explicit successful-row retention cleanup.
 
 Example local test instance (temporary, bound to localhost, no stored password):
 
@@ -134,9 +141,17 @@ must authenticate its caller; do not turn untrusted permission claims into an id
 This is a controlled invocation example, not a durable job or command runtime.
 
 The compiled custom server owns both its Express listener and application shutdown.
-SIGINT/SIGTERM drains work before closing the pool. The transaction adapter checks
-cancellation before BEGIN and COMMIT and rolls back failures; queries already in
-progress are awaited. Cancellation after a successful commit cannot undo it.
+It installs SIGINT/SIGTERM handlers before setup, suppresses listener admission after
+an early signal and awaits actual `application.closed` settlement even if the bounded
+`close()` wait reports a timeout. A referenced hold from bootstrap entry prevents Node
+from exiting under handle-less setup or shutdown settlement; distinct timeout and
+eventual-cleanup errors are both reported. Core owns all distinct listener runtime
+errors through listener detachment; the bootstrap observes them without duplicating
+the causes retained by `application.closed`. The transaction adapter checks cancellation before BEGIN and
+COMMIT and rolls back failures; queries already in progress are awaited.
+Cancellation after a successful commit cannot undo it.
+Setup binds JSON-Line structured operational records, a PostgreSQL readiness probe
+and the publication lane. Operational flush completes before the pool is closed.
 See [lifecycle and migration](../../docs/lifecycle.md).
 
 `test/lifecycle.test.ts` executes the actual HTTP hooks, facade, service and pg adapter
@@ -163,10 +178,34 @@ configuration. Set BORING_WORKER_PERMISSIONS to an empty string to demonstrate
 permission denial; stored jobs cannot add grants. Tenant ownership is not modeled
 by this reference. See [delivery, shutdown and limitations](../../docs/jobs.md).
 
+## Transactional event publication
+
+Every successful new order stages a stable `orders.created` intent through
+`modules/orders/ports/publications.ts` on the same PostgreSQL client as the order,
+audit and idempotency writes. A rollback removes all four effects. Idempotent order
+retries return before staging another intent.
+
+After migration, run a publisher and event consumer as separate processes:
+
+```bash
+BORING_PUBLISHER_PERMISSIONS='' pnpm publisher
+BORING_EVENT_PERMISSIONS=orders:create,orders:observe node dist/boring-consumer.cjs
+# source development: pnpm dev:publisher
+```
+
+The publisher has an explicit machine identity but no business grant. One consumer
+identity covers every event declaration and therefore needs both `orders:create`
+and `orders:observe`; it calls `orders.observeCreated`, which writes an
+idempotent projection through the facade. Publication is at least once: it promises
+neither exactly-once processing nor event order. Successful outbox rows are retained
+until an explicit bounded call to `database.jobs.prunePublications(...)`; pending,
+running and failed rows are preserved. See the complete [publication failure and
+recovery contract](../../docs/publications.md).
+
 ## Schedules, events and commands
 
 After explicit migrations, set `BORING_SCHEDULE_PERMISSIONS=orders:create`,
-`BORING_EVENT_PERMISSIONS=orders:create` and `BORING_COMMAND_PERMISSIONS=orders:create`
+`BORING_EVENT_PERMISSIONS=orders:create,orders:observe` and `BORING_COMMAND_PERMISSIONS=orders:create`
 for the appropriate process. These grants default to empty. All entries call the
 same `orders.create` facade and order/audit/idempotency transaction.
 
@@ -176,6 +215,10 @@ occurrence is admitted; queued/running work suppresses overlap. An occurrence's
 stable UUID becomes requestId. Run `node dist/boring-consumer.cjs` for events.
 Trusted ingress uses `application.acceptEvent` with type `orders.create-requested`,
 version 1, a stable event UUID and a queued-order payload containing requestId.
+The single consumer lane claims all declared event types. Do not run consumers with
+disjoint grants: either process could claim any event and a denied business operation
+is a permanent delivery failure. Give each horizontally scaled consumer the combined
+`BORING_EVENT_PERMISSIONS=orders:create,orders:observe` grant.
 
 `node dist/boring-command.cjs orders/create '{"item":"Manual order","quantity":1,"requestId":"<UUID>"}'`
 runs once, without HTTP. For source use `boring command orders/create --source

@@ -1,12 +1,159 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { get } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { it } from "node:test";
 import { analyzeProject, formatArchitectureDiagnostics } from "@boringapi/analyzer";
+import { runSourceCommand, startDevServer } from "../src";
+
+const workerEntry = join(__dirname, "../dist/worker.js");
+
+function developmentFixture(): { root: string; api: string } {
+    const root = mkdtempSync(join(tmpdir(), "boring-dev-lifecycle-"));
+    const write = (name: string, content: string) => {
+        const target = join(root, name); mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, content);
+    };
+    const core = dirname(require.resolve("@boringapi/core/package.json"));
+    mkdirSync(join(root, "node_modules/@boringapi"), { recursive: true });
+    symlinkSync(core, join(root, "node_modules/@boringapi/core"));
+    for (const name of ["zod", "@types"]) symlinkSync(join(core, "node_modules", name), join(root, "node_modules", name));
+    write("tsconfig.json", JSON.stringify({ extends: "./.boring/tsconfig.json", compilerOptions: {
+        strict: true, skipLibCheck: true, module: "commonjs", target: "ES2020",
+    }, include: ["**/*.ts"] }));
+    write("api/+setup.ts", "export const setup = () => ({});");
+    const project = analyzeProject(root, "api");
+    assert.equal(project.diagnostics.length, 0);
+    assert.equal(formatArchitectureDiagnostics(project.architecture, root), "");
+    return { root, api: join(root, "api") };
+}
+
+function patchWorker(root: string, name: string, source: string): string {
+    const file = join(root, `${name}.cjs`);
+    writeFileSync(file, source);
+    return file;
+}
+
+function spawnWorker(root: string, api: string, patch: string) {
+    return spawn(process.execPath, ["-r", patch, workerEntry, root, api, "0", "", "http"], {
+        cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env },
+    });
+}
+
+it("formats checked source diagnostics relative to the physical project root", async () => {
+    const fixture = developmentFixture();
+    const physical = realpathSync(fixture.root);
+    const alias = `${physical}-alias`;
+    writeFileSync(join(physical, "api/+setup.ts"), `import type {SetupContext} from "./$types";
+export function setup(ctx: SetupContext) { const alias = ctx; alias.readiness("database", () => {}); return {}; }`);
+    symlinkSync(physical, alias, "dir");
+    const expected = (error: unknown) => {
+        const message = String(error);
+        assert.match(message, /api\/\+setup\.ts/);
+        assert.doesNotMatch(message, /\.\.\/boring-dev-lifecycle-/);
+        return true;
+    };
+    try {
+        assert.throws(() => startDevServer(alias, "api"), expected);
+        await assert.rejects(runSourceCommand(alias, "api", "missing", {}), expected);
+    } finally {
+        unlinkSync(alias);
+        rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+async function interruptWorker(root: string, api: string, patch: string, marker: string) {
+    const child = spawnWorker(root, api, patch);
+    let output = "", sent = false;
+    const receive = (chunk: Buffer) => {
+        output += chunk.toString();
+        if (!sent && output.includes(marker)) { sent = true; child.kill("SIGTERM"); }
+    };
+    child.stdout.on("data", receive); child.stderr.on("data", receive);
+    const exited = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", () => resolve()); });
+    const force = setTimeout(() => child.kill("SIGKILL"), 5000);
+    try { await exited; } finally { clearTimeout(force); }
+    assert.ok(sent, output);
+    assert.equal(child.signalCode, null, output);
+    return { code: child.exitCode, output };
+}
+
+async function assertWorkerRetained(root: string, api: string, patch: string, signalMarker: string, pendingMarker = signalMarker): Promise<string> {
+    const child = spawnWorker(root, api, patch);
+    let output = "", sent = false;
+    let observed!: () => void, failed!: (error: Error) => void;
+    const pending = new Promise<void>((resolve, reject) => { observed = resolve; failed = reject; });
+    const exited = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", () => resolve()); });
+    const receive = (chunk: Buffer) => {
+        output += chunk.toString();
+        if (!sent && output.includes(signalMarker)) { sent = true; child.kill("SIGTERM"); }
+        if (sent && output.includes(pendingMarker)) observed();
+    };
+    child.stdout.on("data", receive); child.stderr.on("data", receive);
+    child.once("close", () => { if (!output.includes(pendingMarker)) failed(new Error(`Worker exited before ${pendingMarker}:\n${output}`)); });
+    const timeout = setTimeout(() => failed(new Error(`Worker did not reach ${pendingMarker}:\n${output}`)), 5000);
+    try {
+        await pending; clearTimeout(timeout);
+        await delay(50);
+        assert.equal(child.exitCode, null, output);
+        assert.equal(child.signalCode, null, output);
+    } finally {
+        clearTimeout(timeout);
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await exited;
+    }
+    assert.ok(sent, output);
+    assert.equal(child.signalCode, "SIGKILL", output);
+    return output;
+}
+
+it("owns pending listen, runtime server errors and cleanup in the development HTTP worker", async () => {
+    const { root, api } = developmentFixture();
+    try {
+        const pending = patchWorker(root, "pending-listener", `const {BoringApi,ExecutionError}=require("@boringapi/core");
+BoringApi.prototype.createApp=async()=>{let rejectListen,settle;const closed=new Promise(resolve=>{settle=resolve;});return {
+listen:()=>new Promise((_,reject)=>{rejectListen=reject;console.error("dev listen pending");}),
+close:async()=>{console.error("cleanup finished");rejectListen(new ExecutionError("unavailable","Application shut down while listening"));settle();},get closed(){return closed;}};};`);
+        const interrupted = await interruptWorker(root, api, pending, "dev listen pending");
+        assert.equal(interrupted.code, 0, interrupted.output);
+        assert.equal((interrupted.output.match(/cleanup finished/g) ?? []).length, 1, interrupted.output);
+
+        const runtime = patchWorker(root, "runtime-listener", `const {BoringApi}=require("@boringapi/core");const {EventEmitter}=require("node:events");
+class TestServer extends EventEmitter {address(){return {port:4321};}off(name,listener){const result=super.off(name,listener);if(name==="error")console.error("runtime listener removed");return result;}}
+BoringApi.prototype.createApp=async()=>{let server,observer,settle;const closed=new Promise(resolve=>{settle=resolve;});return {
+listen:async(_port,_handler,onError)=>{observer=onError;server=new TestServer();server.on("error",observer);setImmediate(()=>server.emit("error",new Error("dev listener runtime failure")));return server;},
+close:async()=>{console.error("cleanup finished");const repeated=new Error("dev repeated runtime failure");server.emit("error",repeated);server.emit("error",repeated);server.emit("error",new Error("dev second runtime failure"));server.off("error",observer);settle();},get closed(){return closed;}};};`);
+        const result = spawnSync(process.execPath, ["-r", runtime, workerEntry, root, api, "0", "", "http"], {
+            cwd: root, encoding: "utf8", timeout: 5000, env: { ...process.env },
+        });
+        assert.ifError(result.error);
+        assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+        assert.match(result.stderr, /dev listener runtime failure/);
+        assert.match(result.stderr, /dev repeated runtime failure/);
+        assert.match(result.stderr, /dev second runtime failure/);
+        assert.equal((result.stderr.match(/Error: dev repeated runtime failure/g) ?? []).length, 1, result.stderr);
+        assert.equal((result.stderr.match(/cleanup finished/g) ?? []).length, 1, result.stderr);
+        assert.equal((result.stderr.match(/runtime listener removed/g) ?? []).length, 1, result.stderr);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it("retains the development worker through handleless setup and eventual settlement", async () => {
+    const { root, api } = developmentFixture();
+    try {
+        const setup = patchWorker(root, "handleless-setup", `const {BoringApi}=require("@boringapi/core");
+BoringApi.prototype.createApp=async()=>{console.error("dev handleless setup pending");return new Promise(()=>{});};`);
+        await assertWorkerRetained(root, api, setup, "dev handleless setup pending");
+
+        const settlement = patchWorker(root, "handleless-settlement", `const {BoringApi,ShutdownTimeoutError}=require("@boringapi/core");const {EventEmitter}=require("node:events");
+class TestServer extends EventEmitter {address(){return {port:4321};}}
+BoringApi.prototype.createApp=async()=>({listen:async(_port,_handler,onError)=>{const server=new TestServer();server.on("error",onError);console.error("dev listener ready");return server;},
+close:async()=>{throw new ShutdownTimeoutError();},get closed(){console.error("dev closed pending without handles");return new Promise(()=>{});}});`);
+        const output = await assertWorkerRetained(root, api, settlement, "dev listener ready", "dev closed pending without handles");
+        assert.match(output, /dev closed pending without handles/);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 it("drains setup and cleanup after early signals in every development trigger worker", async () => {
     const root = mkdtempSync(join(tmpdir(), "boring-dev-startup-"));
@@ -24,7 +171,7 @@ export async function setup(ctx:SetupContext) {
     try {
         const project = analyzeProject(root, "api");
         assert.equal(project.diagnostics.length, 0); assert.equal(formatArchitectureDiagnostics(project.architecture, root), "");
-        for (const fail of [false, true]) for (const mode of ["scheduler", "schedule", "event"]) {
+        for (const fail of [false, true]) for (const mode of ["scheduler", "schedule", "event", "publication"]) {
             const child = spawn(process.execPath, [join(__dirname, "../dist/worker.js"), root, join(root, "api"), "0", "", mode], {
                 cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, TEST_FAIL_CLEANUP: String(fail) },
             });

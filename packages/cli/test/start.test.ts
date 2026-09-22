@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { it } from "node:test";
-import { resolveStartDirectory } from "@boringapi/build";
+import { resolveStartDirectory, startProject } from "@boringapi/build";
 
 const { after } = require("node:test");
 const repository = join(__dirname, "..");
@@ -99,6 +100,59 @@ async function serves(root: string, args: string[] = [], entry?: string, signal:
     return output;
 }
 
+async function interruptEntry(root: string, entry: string, marker: string, args: string[], env: NodeJS.ProcessEnv) {
+    const child = spawn(process.execPath, [entry, ...args], { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
+    let stdout = "", stderr = "", sent = false;
+    const completed = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", () => resolve()); });
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    child.stderr.on("data", chunk => {
+        stderr += chunk;
+        if (!sent && stderr.includes(marker)) { sent = true; child.kill("SIGTERM"); }
+    });
+    const force = setTimeout(() => child.kill("SIGKILL"), 15000);
+    try { await completed; } finally { clearTimeout(force); }
+    assert.ok(sent, stderr); assert.equal(child.signalCode, null, stderr);
+    assert.equal((stderr.match(/cleanup finished/g) ?? []).length, 1, stderr);
+    return { code: child.exitCode, stdout, stderr };
+}
+
+function patchedCli(root: string, name: string, patch: string): string {
+    write(root, `${name}.cjs`, patch);
+    const entry = `${name}-entry.cjs`;
+    write(root, entry, `require(${JSON.stringify(join(root, `${name}.cjs`))});require(${JSON.stringify(cli)});`);
+    return join(root, entry);
+}
+
+async function assertProcessRetained(root: string, entry: string, args: string[], signalMarker: string, pendingMarker = signalMarker): Promise<string> {
+    const child = spawn(process.execPath, [entry, ...args], { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PORT: "0" } });
+    let output = "", sent = false;
+    let observed!: () => void, failed!: (error: Error) => void;
+    const pending = new Promise<void>((resolve, reject) => { observed = resolve; failed = reject; });
+    const exited = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", () => resolve()); });
+    const receive = (chunk: Buffer) => {
+        output += chunk.toString();
+        if (!sent && output.includes(signalMarker)) { sent = true; child.kill("SIGTERM"); }
+        if (sent && output.includes(pendingMarker)) observed();
+    };
+    child.stdout.on("data", receive); child.stderr.on("data", receive);
+    child.once("close", () => { if (!output.includes(pendingMarker)) failed(new Error(`Process exited before ${pendingMarker}:\n${output}`)); });
+    const timeout = setTimeout(() => failed(new Error(`Process did not reach ${pendingMarker}:\n${output}`)), 5000);
+    try {
+        await pending;
+        clearTimeout(timeout);
+        await new Promise(resolve => setTimeout(resolve, 50));
+        assert.equal(child.exitCode, null, output);
+        assert.equal(child.signalCode, null, output);
+    } finally {
+        clearTimeout(timeout);
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await exited;
+    }
+    assert.ok(sent, output);
+    assert.equal(child.signalCode, "SIGKILL", output);
+    return output;
+}
+
 it("boring build followed by boring start serves compiled aliases and hook types with no path arguments", async () => {
     const root = fixture();
     build(root);
@@ -106,6 +160,20 @@ it("boring build followed by boring start serves compiled aliases and hook types
     assert.equal(manifest.apiDirectory, "api");
     write(root, "api/get.ts", 'throw new Error("SOURCE MUST NOT EXECUTE");');
     await serves(root);
+});
+
+it("startProject returns both lifecycle owners to custom tooling", async () => {
+    const root = fixture();
+    build(root);
+    const onError = () => {};
+    const started = await startProject(root, {}, 0, onError);
+    try {
+        assert.ok(started.server.address());
+        assert.equal(started.application.ready, true);
+    } finally {
+        await started.application.close();
+        await started.application.closed;
+    }
 });
 
 it("start remembers custom build projects and nested output paths and keeps the last successful build", async () => {
@@ -190,6 +258,328 @@ export function setup(ctx: SetupContext) {
     }
 });
 
+it("owns signals received during setup in every direct generated production process", async () => {
+    const root = fixture();
+    write(root, "api/+config.ts", 'import {z} from "zod"; export const schema=z.object({fail:z.boolean()}); export const load=(env:Readonly<Record<string,string|undefined>>)=>({fail:env.TEST_FAIL_CLEANUP==="true"});');
+    write(root, "api/+setup.ts", `import {health} from "$modules/health/facade"; import type {SetupContext} from "./$types";
+export async function setup(ctx:SetupContext) {
+    ctx.onClose("test",async()=>{await new Promise(resolve=>setTimeout(resolve,10));console.error("cleanup finished");if(ctx.config.fail)throw new Error("cleanup failed");});
+    console.error("setup pending"); await new Promise(resolve=>setTimeout(resolve,100)); return {health};
+}`);
+    build(root);
+    const entries: [string, string[], number][] = [
+        ["boring-start.cjs", [], 0], ["boring-worker.cjs", [], 0], ["boring-scheduler.cjs", [], 0],
+        ["boring-schedule-worker.cjs", [], 0], ["boring-consumer.cjs", [], 0], ["boring-publisher.cjs", [], 0],
+        ["boring-command.cjs", ["unused", "{}"], 130],
+    ];
+    for (const fail of [false, true]) for (const [file, args, stoppedCode] of entries) {
+        const result = await interruptEntry(root, join(root, "dist", file), "setup pending", args, { TEST_FAIL_CLEANUP: String(fail), PORT: "0" });
+        assert.equal(result.code, fail ? 1 : stoppedCode, `${file}: ${result.stderr}`);
+        assert.doesNotMatch(result.stdout + result.stderr, /Listening on port|Configure ctx\.|Unknown application command/);
+    }
+});
+
+it("retains a generated process after an early signal while handleless setup never settles", async () => {
+    const root = fixture();
+    write(root, "pending-setup.cjs", `const {BoringApi}=require("@boringapi/core");
+BoringApi.prototype.createApp=async()=>{console.error("setup pending without handles");return new Promise(()=>{});};`);
+    build(root);
+    const child = spawn(process.execPath, ["-r", join(root, "pending-setup.cjs"), join(root, "dist/boring-start.cjs")], {
+        cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PORT: "0" },
+    });
+    let output = "", signalled = false;
+    let observed!: () => void;
+    const pending = new Promise<void>(resolve => { observed = resolve; });
+    const exited = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", () => resolve()); });
+    const receive = (chunk: Buffer) => {
+        output += chunk.toString();
+        if (!signalled && output.includes("setup pending without handles")) {
+            signalled = true; child.kill("SIGTERM"); observed();
+        }
+    };
+    child.stdout.on("data", receive); child.stderr.on("data", receive);
+    const observationTimeout = setTimeout(() => observed(), 5000);
+    try {
+        await pending; clearTimeout(observationTimeout);
+        assert.ok(signalled, output);
+        await new Promise(resolve => setTimeout(resolve, 50));
+        assert.equal(child.exitCode, null, output); assert.equal(child.signalCode, null, output);
+    } finally {
+        clearTimeout(observationTimeout);
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await exited;
+    }
+    assert.equal(child.signalCode, "SIGKILL", output);
+});
+
+it("treats only a signal-interrupted generated listener start as a clean stop", async () => {
+    const root = fixture();
+    write(root, "pending-listener.cjs", `const {BoringApi,ExecutionError}=require("@boringapi/core");
+BoringApi.prototype.createApp=async()=>{let rejectListen,settle;const closed=new Promise(resolve=>{settle=resolve;});return {
+    listen:()=>new Promise((_,reject)=>{rejectListen=reject;console.error("listen pending");}),
+    close:async()=>{console.error("cleanup finished");rejectListen(new ExecutionError("unavailable","Application shut down while listening"));settle();},
+    get closed(){return closed;}
+};};`);
+    build(root);
+    const entry = join(root, "dist/boring-start.cjs");
+    write(root, "pending-listener-entry.cjs", 'require("./pending-listener.cjs");require("./dist/boring-start.cjs");');
+    const interrupted = await interruptEntry(root, join(root, "pending-listener-entry.cjs"), "listen pending", [], {});
+    assert.equal(interrupted.code, 0, interrupted.stderr);
+    assert.doesNotMatch(interrupted.stdout + interrupted.stderr, /Listening on port|Application shut down while listening/);
+
+    write(root, "failed-listener.cjs", `const {BoringApi}=require("@boringapi/core");
+BoringApi.prototype.createApp=async()=>{let rejectListen,settle;const closed=new Promise(resolve=>{settle=resolve;});return {
+    listen:()=>new Promise((_,reject)=>{rejectListen=reject;console.error("real listener pending");}),
+    close:async()=>{console.error("cleanup finished");rejectListen(Object.assign(new Error("real listener failure"),{code:"EADDRINUSE"}));settle();},
+    get closed(){return closed;}
+};};`);
+    write(root, "failed-listener-entry.cjs", 'require("./failed-listener.cjs");require("./dist/boring-start.cjs");');
+    const failed = await interruptEntry(root, join(root, "failed-listener-entry.cjs"), "real listener pending", [], {});
+    assert.equal(failed.code, 1, failed.stderr);
+    assert.match(failed.stderr, /real listener failure/);
+});
+
+it("owns generated HTTP runtime errors through final listener cleanup", async () => {
+    const root = fixture();
+    build(root);
+    for (const failCleanup of [false, true]) {
+        write(root, "runtime-listener.cjs", `const {BoringApi}=require("@boringapi/core");const {EventEmitter}=require("node:events");
+class TestServer extends EventEmitter {address(){return {port:4321};}off(name,listener){const result=super.off(name,listener);if(name==="error")console.error("runtime listener removed");return result;}}
+BoringApi.prototype.createApp=async()=>{let server,observer,settle,reject;const closed=new Promise((resolve,rejectPromise)=>{settle=resolve;reject=rejectPromise;});return {
+listen:async(_port,_handler,onError)=>{observer=onError;server=new TestServer();server.on("error",observer);setImmediate(()=>{console.error("runtime error emitted");server.emit("error",new Error("listener runtime failure"));});return server;},
+close:async()=>{console.error("cleanup finished");const repeated=new Error("runtime failure during close");server.emit("error",repeated);server.emit("error",repeated);server.emit("error",new Error("second runtime failure during close"));server.off("error",observer);if(${JSON.stringify(failCleanup)}){const error=new Error("runtime cleanup failure");reject(error);throw error;}settle();},
+get closed(){return closed;}};};`);
+        write(root, "runtime-listener-entry.cjs", 'require("./runtime-listener.cjs");require("./dist/boring-start.cjs");');
+        const child = spawn(process.execPath, [join(root, "runtime-listener-entry.cjs")], {
+            cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PORT: "0" },
+        });
+        let output = "";
+        child.stdout.on("data", chunk => { output += chunk.toString(); });
+        child.stderr.on("data", chunk => { output += chunk.toString(); });
+        const exited = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", () => resolve()); });
+        const force = setTimeout(() => child.kill("SIGKILL"), 5000);
+        try { await exited; } finally { clearTimeout(force); }
+        assert.equal(child.signalCode, null, output); assert.equal(child.exitCode, 1, output);
+        assert.match(output, /listener runtime failure/);
+        assert.match(output, /runtime failure during close/);
+        assert.match(output, /second runtime failure during close/);
+        assert.equal((output.match(/Error: runtime failure during close/g) ?? []).length, 1, output);
+        assert.equal((output.match(/cleanup finished/g) ?? []).length, 1, output);
+        assert.equal((output.match(/runtime listener removed/g) ?? []).length, 1, output);
+        assert.ok(output.indexOf("cleanup finished") < output.indexOf("runtime listener removed"), output);
+        if (failCleanup) {
+            assert.match(output, /LifecycleError: HTTP runtime and cleanup failed/);
+            assert.match(output, /runtime cleanup failure/);
+        }
+    }
+});
+
+it("captures generated HTTP runtime errors that arrive during signal cleanup", async () => {
+    const root = fixture();
+    build(root);
+    for (const failCleanup of [false, true]) {
+        write(root, "signal-cleanup-runtime.cjs", `const {BoringApi}=require("@boringapi/core");const {EventEmitter}=require("node:events");
+class TestServer extends EventEmitter {address(){return {port:4321};}}
+BoringApi.prototype.createApp=async()=>{let server,observer,settle,reject;const closed=new Promise((resolve,rejectPromise)=>{settle=resolve;reject=rejectPromise;});return {
+listen:async(_port,_handler,onError)=>{observer=onError;server=new TestServer();server.on("error",observer);console.error("listener ready for signal");return server;},
+close:async()=>{console.error("cleanup finished");await new Promise(resolve=>setImmediate(()=>{server.emit("error",new Error("runtime error during cleanup"));resolve();}));
+server.off("error",observer);if(${JSON.stringify(failCleanup)}){const error=new Error("signal cleanup failure");reject(error);throw error;}settle();},get closed(){return closed;}};};`);
+        write(root, "signal-cleanup-runtime-entry.cjs", 'require("./signal-cleanup-runtime.cjs");require("./dist/boring-start.cjs");');
+        const result = await interruptEntry(root, join(root, "signal-cleanup-runtime-entry.cjs"), "listener ready for signal", [], {});
+        assert.equal(result.code, 1, result.stderr);
+        assert.match(result.stderr, /runtime error during cleanup/);
+        if (failCleanup) {
+            assert.match(result.stderr, /HTTP runtime and cleanup failed/);
+            assert.match(result.stderr, /signal cleanup failure/);
+        }
+    }
+});
+
+it("releases generated HTTP process ownership when listener detachment throws", async () => {
+    const root = fixture();
+    build(root);
+    write(root, "throwing-listener-off.cjs", `const {BoringApi}=require("@boringapi/core");const {EventEmitter}=require("node:events");
+class TestServer extends EventEmitter {address(){return {port:4321};}off(name,listener){if(name==="error")throw new Error("listener detach failure");return super.off(name,listener);}}
+BoringApi.prototype.createApp=async()=>{let server,observer,settle;const closed=new Promise(resolve=>{settle=resolve;});return {
+listen:async(_port,_handler,onError)=>{observer=onError;server=new TestServer();server.on("error",observer);console.error("listener ready for signal");return server;},
+close:async()=>{console.error("cleanup finished");try{server.off("error",observer);}finally{settle();}},get closed(){return closed;}};};`);
+    write(root, "throwing-listener-off-entry.cjs", 'require("./throwing-listener-off.cjs");require("./dist/boring-start.cjs");');
+    const result = await interruptEntry(root, join(root, "throwing-listener-off-entry.cjs"), "listener ready for signal", [], {});
+    assert.equal(result.code, 1, result.stderr);
+    assert.match(result.stderr, /listener detach failure/);
+});
+
+it("waits for actual settlement after generated HTTP shutdown times out", async () => {
+    const root = fixture();
+    write(root, "api/+setup.ts", `import {health} from "$modules/health/facade";import type {SetupContext} from "./$types";
+export function setup(ctx:SetupContext){ctx.onClose("test",()=>console.error("cleanup finished"));return {health};}`);
+    write(root, "api/get.ts", `import type {GetHandler} from "./$types";
+export const handler:GetHandler=async ctx=>{console.error("handler waiting");await new Promise(resolve=>setTimeout(resolve,100));return ctx.services.health();};`);
+    write(root, "short-shutdown.cjs", `const {BoringApi}=require("@boringapi/core");const create=BoringApi.prototype.createApp;
+BoringApi.prototype.createApp=function(directory,options={}){return create.call(this,directory,{...options,shutdownGraceMs:5,shutdownTimeoutMs:20});};`);
+    build(root);
+    const child = spawn(process.execPath, ["-r", join(root, "short-shutdown.cjs"), join(root, "dist/boring-start.cjs")], {
+        cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PORT: "0" },
+    });
+    let output = "", sent = false;
+    const exited = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", () => resolve()); });
+    let request: ReturnType<typeof httpRequest> | undefined;
+    const port = new Promise<number>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error(output)), 10000);
+        const receive = (chunk: Buffer) => {
+            output += chunk.toString();
+            const found = /Listening on port (\d+)/.exec(output);
+            if (found) { clearTimeout(timeout); resolve(Number(found[1])); }
+            if (!sent && output.includes("handler waiting")) {
+                sent = true; request?.destroy(); child.kill("SIGTERM");
+            }
+        };
+        child.stdout.on("data", receive); child.stderr.on("data", receive);
+    });
+    const serverPort = await port;
+    request = httpRequest({ host: "127.0.0.1", port: serverPort, path: "/" });
+    request.on("error", () => {}); request.end();
+    const force = setTimeout(() => child.kill("SIGKILL"), 15000);
+    try { await exited; } finally { clearTimeout(force); }
+    assert.ok(sent, output); assert.equal(child.signalCode, null, output); assert.equal(child.exitCode, 1, output);
+    const cleanup = output.indexOf("cleanup finished"), timeout = output.indexOf("ShutdownTimeoutError");
+    assert.ok(cleanup >= 0 && timeout > cleanup, output);
+});
+
+it("keeps a generated process alive while handleless settlement remains pending", async () => {
+    const root = fixture();
+    write(root, "pending-settlement.cjs", `const {BoringApi,ShutdownTimeoutError}=require("@boringapi/core");const {EventEmitter}=require("node:events");
+class TestServer extends EventEmitter {address(){return {port:1};}}
+BoringApi.prototype.createApp=async()=>{const running=setInterval(()=>{},1000);return {
+    listen:async()=>new TestServer(),
+    close:async()=>{clearInterval(running);throw new ShutdownTimeoutError();},
+    get closed(){console.error("closed pending");return new Promise(()=>{});}
+};};`);
+    build(root);
+    const child = spawn(process.execPath, ["-r", join(root, "pending-settlement.cjs"), join(root, "dist/boring-start.cjs")], {
+        cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PORT: "0" },
+    });
+    let output = "", signalled = false;
+    let pending!: () => void;
+    const observed = new Promise<void>(resolve => { pending = resolve; });
+    const exited = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", () => resolve()); });
+    const receive = (chunk: Buffer) => {
+        output += chunk.toString();
+        if (!signalled && output.includes("Listening on port")) { signalled = true; child.kill("SIGTERM"); }
+        if (output.includes("closed pending")) pending();
+    };
+    child.stdout.on("data", receive); child.stderr.on("data", receive);
+    const observationTimeout = setTimeout(() => pending(), 5000);
+    try {
+        await observed; clearTimeout(observationTimeout);
+        assert.match(output, /closed pending/);
+        await new Promise(resolve => setTimeout(resolve, 50));
+        assert.equal(child.exitCode, null, output);
+        assert.equal(child.signalCode, null, output);
+    } finally {
+        clearTimeout(observationTimeout);
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await exited;
+    }
+    assert.equal(child.signalCode, "SIGKILL", output);
+});
+
+it("reports both a bounded shutdown timeout and a later cleanup failure", async () => {
+    const root = fixture();
+    write(root, "failed-settlement.cjs", `const {BoringApi,ShutdownTimeoutError}=require("@boringapi/core");const {EventEmitter}=require("node:events");
+class TestServer extends EventEmitter {address(){return {port:1};}}
+BoringApi.prototype.createApp=async()=>{const running=setInterval(()=>{},1000);return {
+    listen:async()=>new TestServer(),
+    close:async()=>{clearInterval(running);throw new ShutdownTimeoutError();},
+    get closed(){return new Promise((_,reject)=>setTimeout(()=>reject(new Error("actual cleanup failed")),25));}
+};};`);
+    build(root);
+    const child = spawn(process.execPath, ["-r", join(root, "failed-settlement.cjs"), join(root, "dist/boring-start.cjs")], {
+        cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PORT: "0" },
+    });
+    let output = "", signalled = false;
+    const receive = (chunk: Buffer) => {
+        output += chunk.toString();
+        if (!signalled && output.includes("Listening on port")) { signalled = true; child.kill("SIGTERM"); }
+    };
+    child.stdout.on("data", receive); child.stderr.on("data", receive);
+    const exited = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", () => resolve()); });
+    const force = setTimeout(() => child.kill("SIGKILL"), 5000);
+    try { await exited; } finally { clearTimeout(force); }
+    assert.equal(child.signalCode, null, output); assert.equal(child.exitCode, 1, output);
+    assert.match(output, /LifecycleError: Shutdown wait and eventual cleanup failed/);
+    assert.match(output, /ShutdownTimeoutError/);
+    assert.match(output, /actual cleanup failed/);
+});
+
+it("does not duplicate the same failure from close and closed", async () => {
+    const root = fixture();
+    write(root, "same-settlement-failure.cjs", `const {BoringApi}=require("@boringapi/core");const {EventEmitter}=require("node:events");
+class TestServer extends EventEmitter {address(){return {port:1};}}
+const failure=new Error("same settlement failure");
+BoringApi.prototype.createApp=async()=>{const running=setInterval(()=>{},1000);return {
+    listen:async()=>new TestServer(),
+    close:async()=>{clearInterval(running);throw failure;},
+    get closed(){return Promise.reject(failure);}
+};};`);
+    build(root);
+    const child = spawn(process.execPath, ["-r", join(root, "same-settlement-failure.cjs"), join(root, "dist/boring-start.cjs")], {
+        cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PORT: "0" },
+    });
+    let output = "", signalled = false;
+    const receive = (chunk: Buffer) => {
+        output += chunk.toString();
+        if (!signalled && output.includes("Listening on port")) { signalled = true; child.kill("SIGTERM"); }
+    };
+    child.stdout.on("data", receive); child.stderr.on("data", receive);
+    const exited = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", () => resolve()); });
+    const force = setTimeout(() => child.kill("SIGKILL"), 5000);
+    try { await exited; } finally { clearTimeout(force); }
+    assert.equal(child.signalCode, null, output); assert.equal(child.exitCode, 1, output);
+    assert.match(output, /same settlement failure/);
+    assert.doesNotMatch(output, /Shutdown wait and eventual cleanup failed/);
+});
+
+it("preserves lifecycle causes in every generated trigger process JSON error", async () => {
+    const root = fixture();
+    write(root, "trigger-lifecycle-failure.cjs", `const {BoringApi,ShutdownTimeoutError}=require("@boringapi/core");
+BoringApi.prototype.createApp=async()=>{let finish;const run=()=>new Promise(resolve=>{finish=resolve;console.error("operation pending");});return {
+    schedule:run,work:run,command:run,
+    close:async()=>{finish();throw new ShutdownTimeoutError();},
+    get closed(){return new Promise((_,reject)=>setTimeout(()=>reject(new Error("actual cleanup failed")),25));}
+};};`);
+    build(root);
+    const entries: [string, string[]][] = [
+        ["boring-scheduler.cjs", []], ["boring-schedule-worker.cjs", []], ["boring-consumer.cjs", []],
+        ["boring-publisher.cjs", []], ["boring-command.cjs", ["unused", "{}"]],
+    ];
+    for (const [entry, args] of entries) {
+        const child = spawn(process.execPath, ["-r", join(root, "trigger-lifecycle-failure.cjs"), join(root, "dist", entry), ...args], {
+            cwd: root, stdio: ["ignore", "pipe", "pipe"],
+        });
+        let stdout = "", stderr = "", signalled = false;
+        child.stdout.on("data", chunk => { stdout += chunk.toString(); });
+        child.stderr.on("data", chunk => {
+            stderr += chunk.toString();
+            if (!signalled && stderr.includes("operation pending")) { signalled = true; child.kill("SIGTERM"); }
+        });
+        const exited = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", () => resolve()); });
+        const force = setTimeout(() => child.kill("SIGKILL"), 5000);
+        try { await exited; } finally { clearTimeout(force); }
+        assert.ok(signalled, `${entry}: ${stderr}`); assert.equal(child.signalCode, null, `${entry}: ${stderr}`);
+        assert.equal(child.exitCode, 1, `${entry}: ${stderr}`); assert.equal(stdout, "", entry);
+        const lines = stderr.trim().split("\n").filter(line => line.startsWith("{"));
+        assert.equal(lines.length, 1, `${entry}: ${stderr}`);
+        const description = JSON.parse(lines[0]).error;
+        assert.equal(description.code, "internal_error");
+        assert.equal(description.message, "Shutdown wait and eventual cleanup failed");
+        assert.deepEqual(description.causes.map((cause: any) => [cause.name, cause.message]), [
+            ["ShutdownTimeoutError", "Shutdown timed out; resources remain owned until active executions and cleanup settle"],
+            ["Error", "actual cleanup failed"],
+        ]);
+    }
+});
+
 it("rejects source that collides with the generated entry point before replacing a successful build", () => {
     const root = fixture();
     build(root);
@@ -229,6 +619,74 @@ it("start validates build metadata instead of following malformed or escaping pa
     }
     write(root, ".boring/build.json", '{"version":1,"outputDirectory":"../elsewhere"}');
     assert.throws(() => resolveStartDirectory(root, {}), /Invalid directory/);
+});
+
+it("owns a signal that interrupts the direct CLI while HTTP listen is pending", async () => {
+    const root = fixture();
+    build(root);
+    const entry = patchedCli(root, "cli-pending-listener", `const {BoringApi,ExecutionError}=require("@boringapi/core");
+BoringApi.prototype.createApp=async()=>{let rejectListen,settle;const closed=new Promise(resolve=>{settle=resolve;});return {
+listen:()=>new Promise((_,reject)=>{rejectListen=reject;console.error("direct listen pending");}),
+close:async()=>{console.error("cleanup finished");rejectListen(new ExecutionError("unavailable","Application shut down while listening"));settle();},
+get closed(){return closed;}};};`);
+    const result = await interruptEntry(root, entry, "direct listen pending", ["start", "--out-dir", "dist", "--port", "0"], {});
+    assert.equal(result.code, 0, result.stderr);
+    assert.doesNotMatch(result.stdout + result.stderr, /Listening on port|Application shut down while listening/);
+});
+
+it("owns direct CLI HTTP runtime errors through application settlement", () => {
+    const root = fixture();
+    build(root);
+    const entry = patchedCli(root, "cli-runtime-listener", `const {BoringApi}=require("@boringapi/core");const {EventEmitter}=require("node:events");
+class TestServer extends EventEmitter {address(){return {port:4321};}off(name,listener){const result=super.off(name,listener);if(name==="error")console.error("runtime listener removed");return result;}}
+BoringApi.prototype.createApp=async()=>{let server,observer,settle;const closed=new Promise(resolve=>{settle=resolve;});return {
+listen:async(_port,_handler,onError)=>{observer=onError;server=new TestServer();server.on("error",observer);setImmediate(()=>server.emit("error",new Error("direct listener runtime failure")));return server;},
+close:async()=>{console.error("cleanup finished");const repeated=new Error("direct repeated runtime failure");server.emit("error",repeated);server.emit("error",repeated);server.emit("error",new Error("direct second runtime failure"));server.off("error",observer);settle();},get closed(){return closed;}};};`);
+    const result = spawnSync(process.execPath, [entry, "start", "--out-dir", "dist", "--port", "0"], {
+        cwd: root, encoding: "utf8", timeout: 5000, env: { ...process.env, PORT: "0" },
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stderr, /direct listener runtime failure/);
+    assert.match(result.stderr, /direct repeated runtime failure/);
+    assert.match(result.stderr, /direct second runtime failure/);
+    assert.equal((result.stderr.match(/Error: direct repeated runtime failure/g) ?? []).length, 1, result.stderr);
+    assert.equal((result.stderr.match(/cleanup finished/g) ?? []).length, 1, result.stderr);
+    assert.equal((result.stderr.match(/runtime listener removed/g) ?? []).length, 1, result.stderr);
+});
+
+it("retains every direct CLI process during handleless application setup", async () => {
+    const root = fixture();
+    build(root);
+    const entry = patchedCli(root, "cli-handleless-setup", `const {BoringApi}=require("@boringapi/core");
+BoringApi.prototype.createApp=async()=>{console.error("handleless setup pending");return new Promise(()=>{});};`);
+    for (const args of [
+        ["start", "--out-dir", "dist", "--port", "0"],
+        ["publisher", "--out-dir", "dist"],
+        ["command", "unused", "--out-dir", "dist", "--input", "{}"],
+    ]) await assertProcessRetained(root, entry, args, "handleless setup pending");
+});
+
+it("retains every direct CLI process through handleless eventual settlement", async () => {
+    const root = fixture();
+    build(root);
+    const entry = patchedCli(root, "cli-handleless-settlement", `const {BoringApi,ExecutionError,ShutdownTimeoutError}=require("@boringapi/core");const {EventEmitter}=require("node:events");
+class TestServer extends EventEmitter {address(){return {port:4321};}}
+BoringApi.prototype.createApp=async()=>{let finish=()=>{};return {
+listen:async(_port,_handler,onError)=>{const server=new TestServer();server.on("error",onError);console.error("http operation ready");return server;},
+work:()=>new Promise(resolve=>{finish=resolve;console.error("worker operation ready");}),
+command:(_name,_input,{signal})=>new Promise((_,reject)=>{console.error("command operation ready");signal.addEventListener("abort",()=>reject(new ExecutionError("cancelled","Command cancelled")),{once:true});}),
+close:async()=>{finish();throw new ShutdownTimeoutError();},
+get closed(){console.error("closed pending without handles");return new Promise(()=>{});}};};`);
+    const cases: [string[], string][] = [
+        [["start", "--out-dir", "dist", "--port", "0"], "http operation ready"],
+        [["publisher", "--out-dir", "dist"], "worker operation ready"],
+        [["command", "unused", "--out-dir", "dist", "--input", "{}"], "command operation ready"],
+    ];
+    for (const [args, marker] of cases) {
+        const output = await assertProcessRetained(root, entry, args, marker, "closed pending without handles");
+        assert.match(output, /closed pending without handles/);
+    }
 });
 
 it("runs schema-checked application commands through source and compiled CLI without argument grants", () => {
@@ -278,7 +736,7 @@ export async function setup(ctx:SetupContext) {
     write(root, "commands/health/command.ts", 'import {z} from "zod";import type {CommandHandler} from "./$types";export const input=z.object({});export const output=z.object({status:z.string()});export const timeoutMs=1000;export const handler:CommandHandler=ctx=>ctx.services.health();');
     build(root);
     for (const fail of [false, true]) {
-        for (const mode of ["scheduler", "schedule-worker", "consumer"]) {
+        for (const mode of ["scheduler", "schedule-worker", "consumer", "publisher"]) {
             const result = await interruptAt(root, [mode, "--out-dir", "dist"], "setup pending", fail);
             assert.equal(result.code, fail ? 1 : 0, result.stderr);
             assert.doesNotMatch(result.stderr, /Configure ctx\./, "No work starts after an early stop");

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { it } from "node:test";
@@ -12,7 +12,7 @@ import { registerTypeScript } from "@boringapi/compiler/register";
 const repository = join(__dirname, "..");
 
 function consumer(files: Record<string, string>, run: (root: string) => void | Promise<void>) {
-    const root = mkdtempSync(join(tmpdir(), "boring-clientgen-"));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "boring-clientgen-")));
     let pending = false;
     try {
         for (const [file, content] of Object.entries({

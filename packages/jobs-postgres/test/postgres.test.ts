@@ -6,9 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "node:test";
 import { Pool } from "pg";
-import { ApplicationError, BoringApi } from "@boringapi/core";
+import { ApplicationError, BoringApi, eventPublication } from "@boringapi/core";
 import type { SetupContext, StoredJob } from "@boringapi/core";
-import { createPostgresJobs, jobMigration } from "../src";
+import { createPostgresJobs, jobMigration, publicationMigration, stagePostgresEvent } from "../src";
 const skip = !process.env.BORING_TEST_DATABASE_URL && "Set BORING_TEST_DATABASE_URL for actual PostgreSQL durability and crash tests";
 const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 async function database(run: (pool: Pool, url: string) => Promise<void>) {
@@ -17,7 +17,7 @@ async function database(run: (pool: Pool, url: string) => Promise<void>) {
     await admin.query(`CREATE SCHEMA ${schema}`);
     const url = new URL(process.env.BORING_TEST_DATABASE_URL!); url.searchParams.set("options", `-csearch_path=${schema}`);
     const pool = new Pool({ connectionString: url.toString() });
-    try { await pool.query(jobMigration.sql); await run(pool, url.toString()); }
+    try { await pool.query(jobMigration.sql); await pool.query(publicationMigration.sql); await run(pool, url.toString()); }
     finally { await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); }
 }
 function job(overrides: Partial<StoredJob> = {}): StoredJob {
@@ -25,6 +25,27 @@ function job(overrides: Partial<StoredJob> = {}): StoredJob {
         origin: { identity: { kind: "user", id: "user" }, correlationId: "origin", tenantId: "tenant" },
         policy: { maxAttempts: 3, retryDelayMs: 10, timeoutMs: 5000 }, ...overrides };
 }
+
+it("rejects copied, forged and structurally inconsistent publication intents before SQL", async () => {
+    const root = mkdtempSync(join(tmpdir(), "boring-publication-boundary-")); mkdirSync(join(root, "api"));
+    const app = await new BoringApi().createApp(join(root, "api"));
+    let queries = 0;
+    const client = { async query() { queries++; return { rows: [{ id: "inserted" }], rowCount: 1 }; }, release() {} };
+    try {
+        const publication = await app.execute({ identity: { kind: "user", id: "origin", permissions: [] }, tenantId: "tenant", correlationId: "business" }, ({ execution }) =>
+            eventPublication(execution, { id: randomUUID(), type: "orders.created", version: 1, payload: { orderId: randomUUID() } },
+                { maxAttempts: 3, retryDelayMs: 10, timeoutMs: 1000 }));
+        for (const invalid of [
+            { ...publication },
+            { ...publication, id: randomUUID() },
+            { ...publication, origin: { ...publication.origin, identity: { ...publication.origin.identity, id: "forged" } } },
+            { ...publication, payload: { event: { ...publication.payload.event, payload: { changed: true } } } },
+        ]) await assert.rejects(stagePostgresEvent(client, invalid), { code: "invalid_publication" });
+        assert.equal(queries, 0);
+        assert.deepEqual(await stagePostgresEvent(client, publication), { id: publication.id });
+        assert.equal(queries, 1);
+    } finally { await app.close(); rmSync(root, { recursive: true, force: true }); }
+});
 
 it("persists enqueue from an exited process and executes through a fresh compiler-free worker process", { skip }, async () => database(async (pool, url) => {
     const root = mkdtempSync(join(tmpdir(), "boring-pg-worker-"));
@@ -107,6 +128,48 @@ it("retains exhausted jobs, delays retries, renews leases and supports deliberat
     const replay = (await queue.claim(1000))!; assert.equal(replay.attempt, 1); assert.deepEqual(replay.payload, input.payload);
     assert.equal(await queue.fail(replay, { code: "forbidden", message: "Forbidden" }), true);
     assert.equal((await queue.get(input.id))?.status, "failed");
+}));
+
+it("stages event publications in the caller transaction, cooperates across publishers and prunes only successes", { skip }, async () => database(async pool => {
+    const root = mkdtempSync(join(tmpdir(), "boring-publication-")); mkdirSync(join(root, "api"));
+    const app = await new BoringApi().createApp(join(root, "api"));
+    try {
+        const publication = await app.execute({ identity: { kind: "user", id: "origin", permissions: [] }, tenantId: "tenant", correlationId: "business" }, ({ execution }) =>
+            eventPublication(execution, { id: randomUUID(), type: "orders.created", version: 1, payload: { orderId: randomUUID() } },
+                { maxAttempts: 3, retryDelayMs: 10, timeoutMs: 1000 }));
+        const rollback = await pool.connect();
+        try { await rollback.query("BEGIN"); await stagePostgresEvent(rollback, publication); await rollback.query("ROLLBACK"); }
+        finally { rollback.release(); }
+        assert.equal((await pool.query("SELECT count(*)::int n FROM boring_jobs")).rows[0].n, 0);
+
+        const commit = await pool.connect();
+        try {
+            await commit.query("BEGIN"); await commit.query("SET LOCAL synchronous_commit=on");
+            assert.deepEqual(await stagePostgresEvent(commit, publication), { id: publication.id });
+            await commit.query("COMMIT");
+        } finally { commit.release(); }
+        const duplicate = await pool.connect();
+        try { await duplicate.query("BEGIN"); assert.deepEqual(await stagePostgresEvent(duplicate, publication), { id: publication.id }); await duplicate.query("COMMIT"); }
+        finally { duplicate.release(); }
+        const conflicts = await app.execute({ identity: { kind: "user", id: "origin", permissions: [] }, tenantId: "tenant", correlationId: "retry" }, ({ execution }) => [
+            eventPublication(execution, { ...publication.payload.event, payload: { changed: true } }, publication.policy),
+            eventPublication(execution, { ...publication.payload.event, version: 2 }, publication.policy),
+        ]);
+        for (const conflict of conflicts) {
+            const conflicting = await pool.connect();
+            try {
+                await conflicting.query("BEGIN"); await assert.rejects(stagePostgresEvent(conflicting, conflict), { code: "publication_conflict" }); await conflicting.query("ROLLBACK");
+            } finally { conflicting.release(); }
+        }
+
+        const first = createPostgresJobs(pool), second = createPostgresJobs(pool);
+        const claims = await Promise.all([first.claim(1000, "publication"), second.claim(1000, "publication")]);
+        assert.equal(claims.filter(Boolean).length, 1);
+        assert.equal(await first.prunePublications(Date.now() + 1000), 0);
+        assert.equal(await first.succeed(claims.find(Boolean)!), true);
+        assert.equal(await first.prunePublications(Date.now() + 1000), 1);
+        assert.equal(await first.get(publication.id), undefined);
+    } finally { await app.close(); rmSync(root, { recursive: true, force: true }); }
 }));
 
 it("checks lease expiry after acquiring a row lock for renew, succeed and fail", { skip }, async () => database(async pool => {

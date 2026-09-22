@@ -11,11 +11,14 @@ It uses TypeScript, Express 4 and Zod 3.
 - **Enforced boundaries:** mandatory checks reject imports that bypass the supported application boundaries, including unused source and aliases.
 - **Discover before extending:** inspect existing operations, schemas and entry points; generators reuse the same checked application model.
 - **Owned lifecycle:** validated configuration, managed cleanup, isolated execution contexts and shared HTTP/non-HTTP operations. [Lifecycle contract](docs/lifecycle.md).
+- **Reliable publication:** transactional PostgreSQL event intents, a fenced publisher and durable deduplicating consumers make commit-to-delivery recovery explicit. [Publication contract](docs/publications.md).
+- **Operational boundaries:** structured logs, correlated spans, bounded metrics and lifecycle-aware health/readiness share one adapter contract. [Operational contract](docs/operations.md).
 - **Typed HTTP conventions:** filesystem routes and named hooks describe requests, validation, identity and responses.
 
 Today the framework provides an HTTP runtime, module import checks, web integration
 patterns, a common execution lifecycle, durable PostgreSQL jobs and development/build
-tooling, including schedules, durable event consumers and application commands.
+tooling, including schedules, durable event consumers, application commands,
+transactional event publication and operational signals.
 The [project vision](docs/vision.md) is the design brief;
 the [roadmap](docs/roadmap.md) records current enforcement gaps and delivery milestones.
 
@@ -107,7 +110,8 @@ All guides below are included in the npm package.
 - [CLI and deployment](docs/cli.md) — scaffolding, aliases, development and production.
 - [Routes, modules and permissions](docs/application.md) — application structure and checked boundaries.
 - [Application lifecycle](docs/lifecycle.md) — configuration, ownership, controlled execution, cancellation and migration.
-- [Durable jobs](docs/jobs.md) and [schedules, events and commands](docs/triggers.md) — shared facades, delivery rules and separate processes.
+- [Durable jobs](docs/jobs.md), [schedules, events and commands](docs/triggers.md), and [reliable publication](docs/publications.md) — shared facades, delivery rules and separate processes.
+- [Operational contract](docs/operations.md) — structured records, correlation, metrics, health/readiness and flush ownership.
 - [Hooks and generated types](docs/reference.md) — context, validation and request lifecycle.
 - [Inspection catalog](docs/inspection.md) — discover existing code and consume the JSON format.
 - [Database and web applications](docs/web.md) — transactions, SPA/MPA reuse and the typed browser client.

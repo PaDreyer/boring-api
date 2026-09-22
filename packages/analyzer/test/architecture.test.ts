@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { it } from "node:test";
@@ -11,7 +11,7 @@ import { architectureFiles, checkArchitecture, formatArchitectureDiagnostics } f
 const repository = join(__dirname, "..");
 
 function project(files: Record<string, string>, run: (root: string) => void): void {
-    const root = mkdtempSync(join(tmpdir(), "boring-architecture-"));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "boring-architecture-")));
     try {
         for (const [name, text] of Object.entries({
             "package.json": '{"name":"architecture-consumer","private":true}',
@@ -334,7 +334,7 @@ it("does not allow unclassified helpers or misplaced module files to bypass the 
 
 it("startup and check reject prototype folder names using the ordinary URL convention", async () => {
     for (const name of ["_base", "_setup"]) {
-        const root = mkdtempSync(join(tmpdir(), "boring-invalid-folder-"));
+        const root = realpathSync(mkdtempSync(join(tmpdir(), "boring-invalid-folder-")));
         try {
             mkdirSync(join(root, "api", name), { recursive: true });
             writeFileSync(join(root, "api", name, "get.js"), "exports.handler = () => null;");
@@ -450,7 +450,8 @@ it("checks imperative setup writes, mutable aliases and unsupported boundary for
     }, root => {
         const { diagnostics } = inspect(root);
         const setup = diagnostics.filter(error => error.code === "BORING113" && error.file.fileName === join(root, "api/+setup.ts"));
-        assert.equal(setup.length, 5, setup.map(error => error.message).join("\n"));
+        assert.equal(setup.length, 6, setup.map(error => error.message).join("\n"));
+        assert.ok(setup.some(error => error.message.includes("Do not erase or structurally replace SetupContext")));
         assert.ok(diagnostics.some(error => error.code === "BORING112" && error.file.fileName === join(root, "modules/common/facade.js")));
         assert.ok(diagnostics.some(error => error.code === "BORING114" && error.file.fileName === join(root, "modules/lazy/facade.ts")));
         assert.ok(diagnostics.some(error => error.code === "BORING112" && error.file.fileName === join(root, "modules/inline/facade.ts")));

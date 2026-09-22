@@ -1,9 +1,9 @@
 import { formatHost } from "@boringapi/compiler";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { it } from "node:test";
 import ts from "typescript";
 import { generateTypes } from "@boringapi/typegen";
@@ -15,14 +15,15 @@ import { registerTypeScript } from "@boringapi/compiler/register";
 
 const { after } = require("node:test");
 const repository = join(__dirname, "..");
-const suite = mkdtempSync(join(tmpdir(), "boring-aliases-"));
+const temporarySuite = mkdtempSync(join(tmpdir(), "boring-aliases-"));
+const suite = realpathSync(temporarySuite);
 const library = dirname(require.resolve("@boringapi/core/package.json"));
 function write(root: string, file: string, content: string) {
     const target = join(root, file);
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, content);
 }
-after(() => rmSync(suite, { recursive: true, force: true }));
+after(() => rmSync(temporarySuite, { recursive: true, force: true }));
 
 function fixture() {
     const root = mkdtempSync(join(suite, "consumer-"));
@@ -86,6 +87,26 @@ function checked(root: string) {
     assert.deepEqual(project.architecture.map(error => error.message), []);
     return project;
 }
+
+it("uses one physical consumer root through the native temporary path and an explicit symlink", () => {
+    const root = fixture();
+    const nativeAlias = join(temporarySuite, relative(suite, root));
+    const explicitAlias = join(suite, `consumer-alias-${Date.now()}`);
+    symlinkSync(root, explicitAlias, "dir");
+    const expected = inspectProject(checked(root));
+    let aliased = checked(nativeAlias);
+    assert.equal(aliased.projectRoot, root);
+    assert.deepEqual(inspectProject(aliased), expected);
+    aliased = analyzeProject(explicitAlias, "app/http", join(explicitAlias, "tsconfig.json"));
+    assert.equal(aliased.diagnostics.length, 0, ts.formatDiagnostics(aliased.diagnostics, formatHost(explicitAlias)));
+    assert.deepEqual(aliased.architecture.map(error => error.message), []);
+    assert.equal(aliased.projectRoot, root);
+    assert.deepEqual(inspectProject(aliased), expected);
+    const built = buildProject(aliased);
+    assert.deepEqual(built.diagnostics, []);
+    assert.equal(built.output, join(root, "output"));
+    assert.ok(existsSync(join(root, "output/http/orders/[id]/get.js")));
+});
 
 it("gates inspection and builds on the same setup exposure diagnostics", () => {
     const root = fixture();
@@ -186,7 +207,7 @@ it("checks and inspects aliases, including unused modules, without executing sou
 });
 
 it("rejects directories colliding with generated build files before the first write and permits a corrected retry", () => {
-    for (const reserved of ["boring-start.cjs", ".boring-build.json"]) {
+    for (const reserved of ["boring-start.cjs", "boring-publisher.cjs", ".boring-build.json"]) {
         const root = fixture();
         write(root, `app/${reserved}/helper.ts`, "export const helper = true;");
         const config = JSON.parse(readFileSync(join(root, "tsconfig.json"), "utf8"));
@@ -198,6 +219,7 @@ it("rejects directories colliding with generated build files before the first wr
         rmSync(join(root, "app", reserved), { recursive: true });
         assert.deepEqual(buildProject(checked(root)).diagnostics.map(error => ts.flattenDiagnosticMessageText(error.messageText, "\n")), []);
         assert.ok(existsSync(join(root, "output/boring-start.cjs")));
+        assert.ok(existsSync(join(root, "output/boring-publisher.cjs")));
         assert.ok(existsSync(join(root, "output/.boring-build.json")));
     }
 });

@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import { BoringApi, commandFailure, scheduleDue, triggerId, requirePermissions, ShutdownTimeoutError } from "../src";
+import { BoringApi, commandFailure, eventPublication, scheduleDue, triggerId, requirePermissions, ShutdownTimeoutError } from "../src";
 import type { TriggerAdapter, SetupContext, ScheduleTiming, StoredJob, ExecutionContext } from "../src";
 const identity = { kind: "machine" as const, id: "configured", permissions: ["create"] };
 const producer = { kind: "user" as const, id: "producer", permissions: [] };
@@ -29,6 +29,7 @@ function fixture(adapter: TriggerAdapter, handler: (ctx: any) => any, options: {
         setup(ctx: SetupContext) {
             const config = { identity: { ...identity, permissions: options.permissions ?? identity.permissions } };
             ctx.commands({ ...config, tenantId: "command-tenant" }); ctx.events(adapter, config); ctx.schedules(adapter, config);
+            ctx.publications(adapter, { identity: { kind: "machine", id: "publisher", permissions: [] } });
             ctx.onClose("fixture", () => options.cleanup?.()); return {};
         } });
     const write = (name: string, text: string) => { const file = join(root, name); mkdirSync(join(file, ".."), { recursive: true }); writeFileSync(file, text); };
@@ -90,6 +91,47 @@ it("validates all consumers before durable ingress and isolates origin from cons
         for (let i = 0; i < 2; i++) assert.equal((await app.runJob({ kind: "event" }))?.status, "succeeded");
         for (const ctx of seen) { assert.deepEqual(ctx.execution.identity, identity); assert.equal(ctx.execution.tenantId, "trusted"); assert.equal(ctx.delivery.origin.correlationId, "origin"); assert.equal(ctx.payload.value, "hello!"); assert.equal(ctx.event.id, event.id); }
         assert.notEqual(seen[0].execution, seen[1].execution); assert.notEqual(seen[0].execution.correlationId, seen[1].execution.correlationId);
+    } finally { await app.close(); f.cleanup(); }
+});
+it("attests publication contexts and returns canonical deeply immutable intents", async () => {
+    const event = { id: triggerId("publication-attestation"), type: "created", version: 1, payload: { nested: { values: ["original"] } } };
+    assert.throws(() => eventPublication({ identity: producer, tenantId: "forged", correlationId: "forged", throwIfAborted() {} } as any, event, policy),
+        /framework-created execution context/);
+    const root = mkdtempSync(join(tmpdir(), "boring-publication-attestation-")); mkdirSync(join(root, "api"));
+    const app = await new BoringApi().createApp(join(root, "api"));
+    try {
+        const [first, secondVersion] = await app.execute({ identity: producer, tenantId: "tenant", correlationId: "origin" }, ({ execution }) => [
+            eventPublication(execution, event, policy),
+            eventPublication(execution, { ...event, version: 2 }, policy),
+        ]);
+        assert.equal(first.id, secondVersion.id, "event version is conflict data, not part of the ingress identity");
+        assert.equal(Object.isFrozen(first), true);
+        assert.equal(Object.isFrozen(first.origin), true);
+        assert.equal(Object.isFrozen(first.origin.identity), true);
+        assert.equal(Object.isFrozen(first.payload), true);
+        assert.equal(Object.isFrozen(first.payload.event), true);
+        assert.equal(Object.isFrozen(first.payload.event.payload), true);
+        assert.equal(Object.isFrozen((first.payload.event.payload as any).nested.values), true);
+        assert.throws(() => { (first.origin.identity as any).id = "mutated"; }, TypeError);
+        assert.throws(() => { ((first.payload.event.payload as any).nested.values as string[]).push("mutated"); }, TypeError);
+    } finally { await app.close(); rmSync(root, { recursive: true, force: true }); }
+});
+it("delivers durable publication intents with publisher identity and original provenance kept separate", async () => {
+    const q = queue(); const seen: any[] = [];
+    const f = fixture(q.adapter, ctx => { seen.push(ctx); });
+    const app = await new BoringApi().createApp(f.api);
+    try {
+        const event = { id: triggerId("published"), type: "created", version: 1, payload: { value: "published" } };
+        const intent = await app.execute({ identity: producer, tenantId: "tenant-a", correlationId: "business-origin" }, ({ execution }) =>
+            eventPublication(execution, event, policy));
+        await q.adapter.enqueue(intent);
+        assert.equal((await app.runJob({ kind: "publication" }))?.status, "succeeded");
+        assert.equal(q.jobs.length, 1);
+        assert.equal((await app.runJob({ kind: "event" }))?.status, "succeeded");
+        assert.equal(seen[0].execution.identity.id, "configured");
+        assert.equal(seen[0].execution.tenantId, "tenant-a");
+        assert.equal(seen[0].delivery.origin.correlationId, "business-origin");
+        assert.equal(seen[0].payload.value, "published");
     } finally { await app.close(); f.cleanup(); }
 });
 it("retains incompatible event metadata without invoking the consumer", async () => {

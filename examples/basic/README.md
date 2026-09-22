@@ -15,6 +15,11 @@ provider and memory store are demonstration code. See the [contributor guide](..
 for checks/builds and the [application reference](../../docs/application.md) for conventions.
 
 The example server listens on port 4040 by default; set `PORT` to change it.
+Its compiled custom bootstrap installs process signal handlers before setup and
+keeps a referenced process hold from setup through actual shutdown settlement,
+including an early signal while setup is still pending. The process supervisor owns
+any final forced termination. Core owns listener runtime errors through listener
+detachment; the bootstrap awaits `application.closed` before releasing the hold.
 
 ```bash
 curl http://localhost:4040/health

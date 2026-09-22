@@ -52,12 +52,12 @@ function watchDirectories(directory: string, onChange: () => void): () => void {
     };
 }
 
-export function startDevServer(root: string, apiDirectory: string, port = 4040, projectFile?: string, worker: boolean | "scheduler" | "schedule" | "event" = false): DevServer {
+export function startDevServer(root: string, apiDirectory: string, port = 4040, projectFile?: string, worker: boolean | "scheduler" | "schedule" | "event" | "publication" = false): DevServer {
     root = resolve(root);
     const api = resolve(root, apiDirectory);
     const sync = () => {
         const result = analyzeProject(root, apiDirectory, projectFile);
-        if (result.diagnostics.length || result.architecture.length) throw new Error("Fix check diagnostics before development startup: " + result.diagnostics.map(d => d.messageText).join("\n") + "\n" + formatArchitectureDiagnostics(result.architecture, root));
+        if (result.diagnostics.length || result.architecture.length) throw new Error("Fix check diagnostics before development startup: " + result.diagnostics.map(d => d.messageText).join("\n") + "\n" + formatArchitectureDiagnostics(result.architecture, result.projectRoot));
         console.info(`Generated ${result.files.length} type file${result.files.length === 1 ? "" : "s"}.`);
     };
     sync();
@@ -132,13 +132,34 @@ export function startDevServer(root: string, apiDirectory: string, port = 4040, 
 /** One checked source invocation. Source watching never replays application commands. */
 export async function runSourceCommand(root: string, apiDirectory: string, name: string, input: unknown, projectFile?: string, signal?: AbortSignal) {
     const project = analyzeProject(resolve(root), apiDirectory, projectFile);
-    if (project.diagnostics.length || project.architecture.length) throw new Error("Fix check diagnostics before command execution: " + project.diagnostics.map(d => d.messageText).join("\n") + "\n" + formatArchitectureDiagnostics(project.architecture, root));
+    if (project.diagnostics.length || project.architecture.length) throw new Error("Fix check diagnostics before command execution: " + project.diagnostics.map(d => d.messageText).join("\n") + "\n" + formatArchitectureDiagnostics(project.architecture, project.projectRoot));
     const { registerTypeScript } = await import("@boringapi/compiler/register");
-    const { BoringApi } = await import("@boringapi/core");
+    const { BoringApi, LifecycleError } = await import("@boringapi/core");
     const stop = registerTypeScript(project.apiDirectory, project.configuration.options.configFilePath as string | undefined);
+    let result: unknown, failed = false, failure: unknown;
     try {
         const application = await new BoringApi().createApp(project.apiDirectory);
-        try { return await application.command(name, input, { signal }); }
-        finally { await application.close(); await application.closed; }
-    } finally { stop(); }
+        try { result = await application.command(name, input, { signal }); }
+        catch (error) { failed = true; failure = error; }
+        const cleanup: unknown[] = [];
+        try { await application.close(); }
+        catch (error) { cleanup.push(error); }
+        try { await application.closed; }
+        catch (error) { cleanup.push(error); }
+        if (cleanup.length) {
+            const causes = [...(failed ? [failure] : []), ...cleanup];
+            failure = causes.length === 1 ? causes[0] : new LifecycleError("Command execution and cleanup failed", causes);
+            failed = true;
+        }
+    } catch (error) {
+        if (!failed) { failed = true; failure = error; }
+        else if (error !== failure) failure = new LifecycleError("Source command startup and cleanup failed", [failure, error]);
+    }
+    try { stop(); }
+    catch (error) {
+        failure = failed ? new LifecycleError("Source command and compiler cleanup failed", [failure, error]) : error;
+        failed = true;
+    }
+    if (failed) throw failure;
+    return result;
 }

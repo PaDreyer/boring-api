@@ -23,7 +23,7 @@ guarantees at each phase. Setup runs once per application and keeps its separate
 
 | Hook | Generated context | Available application data |
 | --- | --- | --- |
-| `+setup` | `SetupContext` | Validated `config`, `onClose(name, cleanup)`, setup logger and Map API. Returned services are inferred for subsequent requests. |
+| `+setup` | `SetupContext` | Validated `config`; lifecycle bindings `onClose`, `jobs`, `schedules`, `events`, `commands`, `publications`, `observability` and `readiness`; setup logger and Map API. The framework logger is separate from returned services, including a service named `logger`. Returned services are inferred for subsequent requests. |
 | `authenticate` in `+auth` | `AuthenticationContext` | Inferred services; session is `undefined` and middleware locals are not available yet. |
 | `authorize` in `+auth` | `AuthorizationContext` | Inferred services, a required session, and completed middleware locals for routes declaring authorization. |
 | `+middleware` | `MiddlewareContext` | Inferred services, an optional session and only the preceding middleware's locals. |

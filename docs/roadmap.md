@@ -13,8 +13,8 @@ does not make an enforcement requirement complete.
 | Module boundaries | Shared roles and a mandatory dependency matrix, including split role files, unused source and same-module service caller restrictions. | Static structure cannot infer business meaning or replace permission tests. |
 | Service and adapter separation | Business modules use injected ports; concrete infrastructure imports and service forwarding fail checks. Schemas export data/Zod contracts; ports contain types only. | No semantic proof that a use case implements the correct domain rules. |
 | Dependency composition | Typed configuration, explicit facade/page factories, owned cleanup and checked setup exposure; only the first operation argument may carry a Core execution context. | Static analysis cannot prove that every acquired resource was registered or every asynchronous operation awaited. |
-| Discovery and tooling | Inspection v5 adds schedules, events and commands alongside durable jobs and facade calls alongside the common role model. Generators and portable builds use mandatory checks. | Milestone-4 acceptance is complete; operational integration continues in milestone 5. |
-| Database and web | The PostgreSQL reference reuses orders permissions and transaction boundaries through HTTP, pages and controlled execution; application shutdown owns the pool. | Durable jobs and order idempotency are implemented; reliable event publication remains separate work. |
+| Discovery and tooling | Inspection v6 adds operational/publication bindings to schedules, events, commands, durable jobs, facade calls and the common role model. Generators and portable builds use mandatory checks. | Milestone-5 implementation is complete; registry artifact acceptance remains open. |
+| Database and web | The PostgreSQL reference reuses orders permissions and transaction boundaries through HTTP, pages, controlled execution and transactional event publication; application shutdown owns the pool. | Tenant ownership is application-specific and is not declared by the reference orders use case. |
 
 Evidence lives in `packages/analyzer/src/architecture.ts`,
 `packages/analyzer/src/services.ts`, `packages/core/src/core/context.ts`,
@@ -383,34 +383,62 @@ for exotic callback invocation variants. Future audits remain focused on support
 contracts, plausible application code and consequential failures. Additional syntax
 support needs a concrete consumer use case; it is not a prerequisite for closing
 this milestone. The next implementation work is milestone 5, not another general
-callback-analysis audit. Versioning and publication remain separate actions.
+callback-analysis audit. Milestone 5 subsequently delivered the operational slice;
+versioning and publication remain separate actions.
 
 The supported schedule is a UTC millisecond interval, with explicit latest/skip/
 bounded catch-up and allow/skip overlap policies. There is no calendar/cron or event
 ordering guarantee. Delivery remains bounded at least once with application-owned
 idempotency and possible overlap after lease loss. Commands never automatically
 retry. Cancellation is cooperative and resources remain owned until settlement.
-Atomic business-commit/publication coupling and a general outbox remain milestone 5;
-automatic record pruning and tenant ownership in the example are not provided.
+Atomic business-commit/publication coupling and the outbox publisher are delivered
+in milestone 5. Tenant ownership remains application-specific and is not declared by
+the reference orders use case.
 Append `triggerMigration` after the existing queue migration, configure grants,
-regenerate contracts and rebuild. Inspection v5 and these public additions require
+regenerate contracts and rebuild. Inspection v6 and these public additions require
 the next platform minor on 0.x; versioning and publication remain separate actions.
 
 ## Milestone 5 — Prove a complete operational backend
 
-**Status: planned; integration and production acceptance.** Operational behavior
-needed by an earlier milestone must be delivered with that milestone.
+**Status: implemented and locally production-verified; registry release acceptance
+remains open.** Operational behavior needed by an earlier milestone remains part of
+that milestone's contract.
 
-- [ ] Define reliable event publication across database commits and message delivery,
+- [x] Define reliable event publication across database commits and message delivery,
   with a reference outbox or another explicitly justified consistency mechanism.
-- [ ] Integrate configuration, migrations, structured logs, correlation, tracing,
+- [x] Integrate configuration, migrations, structured logs, correlation, tracing,
   metrics and health/readiness with the established lifecycle and adapters.
-- [ ] Exercise human/machine authorization and tenant isolation where declared,
+- [x] Exercise human/machine authorization and tenant isolation where declared,
   recovery, cancellation and deployment of separate HTTP/worker processes.
 - [ ] Verify actual published artifacts and a clean production installation for
   all supported process types without compiler or CLI dependencies.
-- [ ] Document one complete reference backend and test every architectural boundary
+- [x] Document one complete reference backend and test every architectural boundary
   against direct and indirect bypass attempts.
+
+Evidence: Core owns `publications`, `observability` and `readiness` setup bindings;
+the PostgreSQL adapter stages event intents in the caller transaction and reuses the
+leased/fenced queue for publisher delivery. The fullstack orders use case stages
+`orders.created` beside order, audit and idempotency writes, then consumes it through
+the existing facade. Real PostgreSQL tests cover rollback, an abrupt creator exit,
+competing publishers, lease recovery, a crash after event acceptance and stable
+consumer deduplication. Analyzer bypass cases, inspection v6, generated publisher
+startup, source development mode, health/readiness/metrics and lifecycle flush tests
+cover the convention and operational boundaries. Local packed tarballs are installed
+with production dependencies only, relocated and exercised through HTTP, worker,
+scheduler, schedule worker, event consumer, publisher and command entry points.
+
+A closing publication audit found that the intent factory accepted structurally
+fabricated execution contexts and returned a shallowly frozen value. Core now
+attests the live execution, returns a deeply immutable canonical intent, and marks
+that exact object as a publication capability. PostgreSQL staging rejects copied or
+fabricated intents before SQL and revalidates structure plus the tenant/type/event-ID
+key. Regressions cover forged contexts, nested mutation, reconstructed intents and
+the documented version-conflict behavior.
+
+The artifact checkbox deliberately remains open: local tarballs prove package
+contents but are not a registry release. Close it only after a matching platform
+version is published and the same clean-install matrix passes against those actual
+registry artifacts.
 
 **Acceptance:** a developer or agent can discover and extend the existing use case
 across all supported triggers, locate each responsibility by convention, receive

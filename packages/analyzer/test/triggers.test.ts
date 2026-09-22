@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { it } from "node:test";
@@ -12,7 +12,7 @@ export const version = 1;
 export const policy = {maxAttempts:3,retryDelayMs:10,timeoutMs:1000} as const;
 export const handler: JobHandler = async ctx => { await ctx.services.orders.create(ctx.execution, ctx.payload); };`;
 function fixture(run: (root: string, write: (name: string, content: string) => void) => void) {
-    const root = mkdtempSync(join(tmpdir(), "boring-job-check-"));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "boring-job-check-")));
     const write = (name: string, content: string) => { const file = join(root, name); mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, content); };
     try {
         mkdirSync(join(root, "node_modules/@boringapi"), { recursive: true });
@@ -49,6 +49,7 @@ for (const kind of ["schedule", "event", "command"] as const) {
             ['export {raw} from "$infra/db";', "BORING101"],
             ['import {createOrders} from "$modules/orders/facade";', "BORING101"],
             ['import * as core from "@boringapi/core"; const Factory=core["BoringApi"];', "BORING116"],
+            ['import {eventPublication} from "@boringapi/core";', "BORING116"],
             ['const core=require("@boringapi/core");', "BORING116"],
             ['import type {ExecutionContext} from "@boringapi/core"; const saved=new Map<string,Readonly<ExecutionContext>[]>();', "BORING115"],
             ['const {defineProperty: replace}=Reflect;', "BORING113"],

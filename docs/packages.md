@@ -9,7 +9,7 @@ only its own compiled implementation; cross-package imports use public exports.
 | Package | Responsibility | Public entry points |
 | --- | --- | --- |
 | `@boringapi/core` | Application/execution lifecycle, HTTP runtime, browser transport and shared filesystem conventions | Root runtime API; `/client`; `/conventions`; `/agent-guide` |
-| `@boringapi/jobs-postgres` | Optional compiler-free durable queue; borrows the application PostgreSQL pool | `createPostgresJobs`, `jobMigration`, `triggerMigration`, `JobRecord` |
+| `@boringapi/jobs-postgres` | Optional compiler-free durable queue and transactional publication adapter; borrows the application PostgreSQL pool | `createPostgresJobs`, `jobMigration`, `triggerMigration`, `publicationMigration`, `stagePostgresEvent`, `JobRecord` |
 | `@boringapi/compiler` | TypeScript configuration, alias resolution, import transforms and symbol analysis | Root compiler utilities; `/register` for `registerTypeScript` |
 | `@boringapi/typegen` | HTTP and trigger types, standalone browser contracts | `generateTypes`, `generateClientContracts`, `TypegenResult` |
 | `@boringapi/analyzer` | Static project analysis, architecture checks and inspection | `analyzeProject`, `synchronizeProject`, `checkArchitecture`, `inspectProject` and diagnostic/catalog formatting |
@@ -41,6 +41,14 @@ Trigger types include `ScheduleContext`, `EventContext`, `CommandContext`,
 `TriggerAdapter`. Application adds `tick`, `schedule`, `acceptEvent` and `command`;
 setup adds `schedules`, `events` and `commands`. The [trigger reference](triggers.md)
 defines their contracts and the shared `commandFailure` transport vocabulary.
+
+Publication types include `EventPublication`, `PublishedEvent`, `PublicationError`,
+`eventPublication` and the adapter-boundary `validateEventPublication`; setup adds
+`publications` and application work accepts the reserved publication kind.
+Operational exports include `OperationalAdapter`, `OperationalRecord`,
+`HealthReport`, `ReadinessReport` and `MetricSnapshot`; setup adds `observability`
+and `readiness`, while application adds `health`, `readiness` and `metrics`. See
+[publication](publications.md) and [operations](operations.md).
 
 ## Releases and compatibility
 
@@ -89,8 +97,8 @@ The compiler root entry does not register loaders. See the
 
 `startDevServer(root, apiDirectory, port?, projectFile?, worker = false)` returns a `DevServer`
 with an idempotent asynchronous `close()` method. Set worker to true for jobs,
-`"scheduler"` for schedule admission, `"schedule"` for schedule delivery or `"event"`
-for consumers. `runSourceCommand(root, apiDirectory, name, input, projectFile?, signal?)`
+`"scheduler"` for schedule admission, `"schedule"` for schedule delivery, `"event"`
+for consumers or `"publication"` for the publisher. `runSourceCommand(root, apiDirectory, name, input, projectFile?, signal?)`
 checks and invokes an application command once, then awaits cleanup;
 source admission runs the shared mandatory checks before each start/restart. It owns its watcher and child
 processes; the caller owns process signal handling. On reload and close it sends
@@ -100,10 +108,17 @@ The CLI wires SIGINT/SIGTERM to this lifecycle.
 ## Production and browser code
 
 Build with development dependencies available. Deploy compiled output with
-`npm ci --omit=dev` and start `node dist/boring-start.cjs` or a compiled custom
-server. No development package, TypeScript or ts-node is needed in production.
-`startProject` is a tooling convenience; use the generated Node entry point for
-production deployments.
+`npm ci --omit=dev` and start `node dist/boring-start.cjs`, any generated worker
+entry including `boring-publisher.cjs`, or a compiled custom server. No development
+package, TypeScript or ts-node is needed in production.
+`startProject` is a tooling convenience that returns both the application owner and
+the native HTTP server. Tooling that uses it must keep both until shutdown, attach
+optional runtime-error notification through the callback, and await
+`application.closed`; Core itself owns runtime listener errors and shutdown.
+When moving from the previous return shape, replace the old `application` result
+with `const { application, server } = await startProject(...)`.
+This incompatible tooling-API change ships with the next `0.x` platform minor.
+Use the generated Node entry point for production deployments.
 
 Browser source uses `@boringapi/core/client` and generated `$client` types.
 Runtime imports of development packages and the server convention scanner are

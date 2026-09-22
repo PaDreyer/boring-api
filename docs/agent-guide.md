@@ -117,6 +117,14 @@ acyclic. Invoke a module's services through its owning facade. The checker enfor
 including aliases, service value escapes and type-only references. Factories expose
 explicit objects of facade-owned operations with data inputs/outputs. Setup exposes
 traced public operations and data; inject adapters through typed ports.
+Call operational setup bindings (`ctx.publications`, `ctx.observability` and
+`ctx.readiness`) directly on the setup parameter. Exact string-literal element
+access is also supported. Do not alias or destructure the context/method, cast the
+receiver, compute/assert the key, or invoke through `.call`, `.apply` or `.bind`;
+`BORING113` keeps checks and inspection on one explicit static model.
+Keep the generated/Core `SetupContext` parameter type. `any`, `unknown`, foreign
+structural substitutes and operational calls nested in another function or callback
+are rejected instead of widening setup analysis.
 Export service operations as named functions, not callable containers. Do not hide
 capabilities behind broad data annotations or pass them to data parameters. Call
 `ctx.set`/`ctx.assign` directly; setter destructuring and aliases are rejected.
@@ -242,8 +250,12 @@ project. `GET /health` returns HTTP 200 with `{"status":"ok"}`.
 
 Keep one application-owned database adapter/pool, shared through injected facades.
 Register its cleanup immediately with `ctx.onClose`. Shutdown uses the application
-owner's `close()`, including custom servers. See [lifecycle and migration](lifecycle.md)
-for configuration, draining, timeout behavior and domain-error mappings.
+owner's `close()`, including custom servers. Install custom-server signal handlers
+before setup and retain the process from bootstrap entry through final
+`application.closed` settlement. Core owns listener runtime errors and removes its
+listener before that settlement; an optional callback observes errors but does not
+replace Core's ownership. See [lifecycle and migration](lifecycle.md) for
+configuration, draining, timeout behavior and domain-error mappings.
 Reuse the project's migration history; run migrations explicitly before starting,
 never on ordinary requests. Business operations choose transaction boundaries;
 the adapter executes all transaction queries on the same connection. Parameterize
@@ -278,6 +290,16 @@ See [database and web patterns](web.md) for client contracts and a runnable refe
   directory. For combined static hosting, build browser assets separately and
   start that custom server. Source entry points using aliases need the compiler
   registered before they are loaded. [Bootstrap and deployment details](cli.md).
+- If a commit must publish an event, define a typed domain publication port and
+  stage its stable intent inside the existing facade-owned database transaction.
+  Pass the exact deeply immutable object returned by `eventPublication` to the
+  staging adapter; copied or reconstructed intents are rejected. Bind the publisher
+  in setup and run its generated process separately. Preserve idempotency: delivery
+  is at least once, never promised exactly once or ordered.
+- Register dependency probes and the operational adapter in setup. Expose
+  `application.health()`, `readiness()` and `metrics()` from a custom transport;
+  keep correlation IDs and delivery IDs out of metric labels. See
+  [publication](publications.md) and [operations](operations.md).
 
 If an import fails, first run sync and check the selected API path and generated
 editor mappings. If the checker rejects a dependency, move it to its owning layer;

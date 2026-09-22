@@ -4,6 +4,7 @@ import { applicationRole, findErrorTemplate, SourceScope } from "@boringapi/core
 import { AnalyzedProject } from "./project";
 import { serviceSources } from "./services";
 import { declarationOf, exported, isTypeOnlyExport, moduleExports, originalSymbol, symbolType } from "@boringapi/compiler";
+import { OperationalBindingName, setupBindingMatcher } from "./setup-bindings";
 
 export interface SourceLocation { file: string; line: number; column: number; }
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
@@ -91,6 +92,7 @@ export function inspectProject(project: AnalyzedProject) {
         if (!source) throw new Error(`Cannot inspect source file: ${file}`);
         return source;
     };
+    const setupBindings = setupBindingMatcher(project.program, project.sources.setup ? sourceFile(project.sources.setup) : undefined);
     const relativeImports = (text: string): string =>
         text.replace(/import\("([^"]+)"\)/g, (match, file: string) => isAbsolute(file) ? `import(${JSON.stringify(`./${path(file)}`)})` : match);
     const formatType = (type: ts.Type, node: ts.Node, expand = false): string =>
@@ -168,6 +170,20 @@ export function inspectProject(project: AnalyzedProject) {
         return { generic: hook(findErrorTemplate(scope.errors, 0)), server: hook(findErrorTemplate(scope.errors, 500)),
             statuses: Object.fromEntries(statuses.map(status => [String(status), hook(findErrorTemplate(scope.errors, status))])) };
     }
+    function setupCalls(name: OperationalBindingName): SourceLocation[] {
+        if (!project.sources.setup) return [];
+        const source = sourceFile(project.sources.setup);
+        const result: SourceLocation[] = [];
+        const visit = (node: ts.Node) => {
+            if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+                const binding = setupBindings.access(node);
+                if (binding?.direct && binding.name === name) result.push(location(binding.call!));
+            }
+            ts.forEachChild(node, visit);
+        };
+        visit(source);
+        return result;
+    }
     const routes = project.sources.routes.map(route => {
         const source = sourceFile(route.file);
         const handler = exported(checker, source, "handler");
@@ -212,9 +228,10 @@ export function inspectProject(project: AnalyzedProject) {
         modules.set(entry.module, module);
     }
     return {
-        schemaVersion: 5 as const, apiDirectory: path(project.apiDirectory),
+        schemaVersion: 6 as const, apiDirectory: path(project.apiDirectory),
         configuration: project.sources.config ? { source: location(sourceFile(project.sources.config)), load: hook(project.sources.config, "load"), schema: schema(exported(checker, sourceFile(project.sources.config), "schema")!, sourceFile(project.sources.config)) } : null,
-        lifecycle: { owner: "application" as const, cleanup: "setup.onClose" as const, executions: project.roles.filter(source => source.role === "execution").map(source => path(source.file)) },
+        lifecycle: { owner: "application" as const, cleanup: "setup.onClose" as const, executions: project.roles.filter(source => source.role === "execution").map(source => path(source.file)),
+            publications: setupCalls("publications"), observability: setupCalls("observability"), readiness: setupCalls("readiness") },
         setup: hook(project.sources.setup, "setup"),
         auth: project.sources.auth ? { source: location(sourceFile(project.sources.auth)),
             authenticate: exported(checker, sourceFile(project.sources.auth), "authenticate") ? hook(project.sources.auth, "authenticate") : null,
@@ -273,6 +290,7 @@ export function formatInspection(inspection: Inspection): string {
     const printValue = (value: ExportValue | null) => !value ? "none" : value.kind === "literal" ? JSON.stringify(value.value) :
         value.kind === "undefined" ? "undefined" : `${value.expression} (runtime expression; type: ${value.type})`;
     const lines = [`Boring API — ${inspection.apiDirectory}`, `Configuration: ${inspection.configuration ? at(inspection.configuration.source) : "empty"}`, `Setup: ${inspection.setup ? at(inspection.setup) : "none"}`,
+        `Operations: publications ${inspection.lifecycle.publications.length}; observability ${inspection.lifecycle.observability.length}; readiness ${inspection.lifecycle.readiness.length}`,
         `Authentication: ${inspection.auth?.authenticate ? at(inspection.auth.authenticate) : "none"}`,
         `Authorization: ${inspection.auth?.authorize ? at(inspection.auth.authorize) : "none"}`, "", "Routes"];
     for (const route of inspection.routes) {

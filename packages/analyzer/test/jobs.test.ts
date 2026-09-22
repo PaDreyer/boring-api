@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { it } from "node:test";
@@ -12,7 +12,7 @@ export const version = 1;
 export const policy = {maxAttempts:3,retryDelayMs:10,timeoutMs:1000} as const;
 export const handler: JobHandler = async ctx => { await ctx.services.orders.create(ctx.execution, ctx.payload); };`;
 function fixture(run: (root: string, write: (name: string, content: string) => void) => void) {
-    const root = mkdtempSync(join(tmpdir(), "boring-job-check-"));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "boring-job-check-")));
     const write = (name: string, content: string) => { const file = join(root, name); mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, content); };
     try {
         mkdirSync(join(root, "node_modules/@boringapi"), { recursive: true });
@@ -29,14 +29,114 @@ function fixture(run: (root: string, write: (name: string, content: string) => v
 }
 function messages(root: string) { const p = analyzeProject(root, "api"); return { p, text: formatArchitectureDiagnostics(p.architecture, root) }; }
 
-it("discovers typed job payloads, policies, facade reuse and role dependencies without executing modules", () => fixture(root => {
+it("discovers typed jobs and literal operational setup bindings without executing modules", () => fixture((root, write) => {
+    write("api/+setup.ts", `import type { SetupContext as CoreSetupContext } from "./$types";
+import type { JobAdapter, OperationalAdapter } from "@boringapi/core";
+import { createOrders } from "$modules/orders/facade";
+declare const queue: JobAdapter; declare const operations: OperationalAdapter;
+class SetupContext {
+    publications() {} observability() {} readiness() {}
+}
+export function setup(ctx: CoreSetupContext) {
+    ctx.publications(queue, {identity:{kind:"machine",id:"publisher",permissions:[]}});
+    ctx["publications"](queue, {identity:{kind:"machine",id:"publisher",permissions:[]}});
+    ctx.observability(operations);
+    ctx["observability"](operations);
+    ctx.readiness("cache", () => {});
+    ctx["readiness"]("database", () => {});
+    const foreign = new SetupContext();
+    foreign.readiness();
+    const { readiness: ready } = foreign;
+    ready();
+    return { orders: createOrders() };
+}`);
     const { p, text } = messages(root);
     assert.equal(p.diagnostics.length, 0, ts.formatDiagnostics(p.diagnostics, { getCanonicalFileName: x => x, getCurrentDirectory: () => root, getNewLine: () => "\n" }));
     assert.equal(text, "");
-    const catalog = inspectProject(p); assert.equal(catalog.schemaVersion, 5);
+    const catalog = inspectProject(p); assert.equal(catalog.schemaVersion, 6);
     assert.equal(catalog.jobs[0].name, "orders/create"); assert.deepEqual(catalog.jobs[0].operations, ["ctx.services.orders.create"]);
     assert.equal(catalog.jobs[0].version?.kind, "literal"); assert.equal(catalog.jobs[0].payload?.inputType.includes("value: string"), true);
+    assert.equal(catalog.lifecycle.publications.length, 2);
+    assert.equal(catalog.lifecycle.observability.length, 2);
+    assert.equal(catalog.lifecycle.readiness.length, 2);
     assert.ok(catalog.roles.some(source => source.role === "job"));
+}));
+
+it("rejects every unsupported operational binding form for publications, observability and readiness", () => fixture((root, write) => {
+    const argumentsFor = {
+        publications: 'queue, publisher', observability: 'operations', readiness: '"database", () => {}',
+    } as const;
+    const cases: string[] = [];
+    for (const binding of ["publications", "observability", "readiness"] as const) {
+        const args = argumentsFor[binding];
+        const suffix = cases.length;
+        cases.push(
+            `{ const alias${suffix} = ctx; alias${suffix}.${binding}(${args}); }`,
+            `{ const key${suffix} = "${binding}" as const; ctx[key${suffix}](${args}); }`,
+            `ctx[\`${binding}\`](${args});`,
+            `ctx["${binding}" as "${binding}"](${args});`,
+            `(ctx as CoreSetupContext).${binding}(${args});`,
+            `(ctx as any).${binding}(${args});`,
+            `(ctx as { ${binding}(...args: any[]): void }).${binding}(${args});`,
+            `({} as unknown as CoreSetupContext).${binding}(${args});`,
+            `{ const erased${suffix}: any = ctx; erased${suffix}.${binding}(${args}); }`,
+            `{ const structural${suffix}: { ${binding}(...args: any[]): void } = ctx; structural${suffix}.${binding}(${args}); }`,
+            `ctx.${binding}.call(ctx, ${args});`,
+            `ctx.${binding}.apply(ctx, [${args}]);`,
+            `ctx.${binding}.bind(ctx)(${args});`,
+            `{ const { ${binding}: extracted${suffix} } = ctx; extracted${suffix}(${args}); }`,
+            `{ function nested${suffix}() { ctx.${binding}(${args}); } void nested${suffix}; }`,
+        );
+    }
+    write("api/+setup.ts", `import type { SetupContext as CoreSetupContext } from "./$types";
+import type { JobAdapter, OperationalAdapter } from "@boringapi/core";
+import { createOrders } from "$modules/orders/facade";
+declare const queue: JobAdapter; declare const operations: OperationalAdapter;
+const publisher = {identity:{kind:"machine",id:"publisher",permissions:[]}} as const;
+export function setup(ctx: CoreSetupContext) {
+${cases.map((source, index) => `    /* operational-case-${index} */ ${source}`).join("\n")}
+    return { orders: createOrders() };
+}`);
+    const { p, text } = messages(root);
+    assert.equal(p.diagnostics.length, 0, ts.formatDiagnostics(p.diagnostics, {
+        getCanonicalFileName: x => x, getCurrentDirectory: () => root, getNewLine: () => "\n",
+    }));
+    const source = p.program.getSourceFile(join(root, "api/+setup.ts"))!;
+    const rejectedLines = new Set(p.architecture.filter(error => error.code === "BORING113" && error.file === source)
+        .map(error => source.getLineAndCharacterOfPosition(error.start).line + 1));
+    const caseLines = source.text.split("\n").map((line, index) => line.includes("operational-case-") ? index + 1 : 0).filter(Boolean);
+    assert.equal(caseLines.length, cases.length);
+    for (const line of caseLines) assert.ok(rejectedLines.has(line), `Missing positioned BORING113 on line ${line}:\n${text}`);
+}));
+
+it("requires the real Core SetupContext parameter contract without rejecting contextual inference", () => fixture((root, write) => {
+    write("api/+setup.ts", `import type { SetupHandler } from "./$types";
+import { createOrders } from "$modules/orders/facade";
+export const setup = ((ctx) => {
+    ctx.readiness("database", () => {});
+    return { orders: createOrders() };
+}) satisfies SetupHandler;`);
+    assert.equal(messages(root).text, "");
+
+    const invalid = [
+        `export function setup(ctx: any) { return { orders: createOrders() }; }`,
+        `export function setup(ctx: unknown) { return { orders: createOrders() }; }`,
+        `export function setup({ readiness }: any) { void readiness; return { orders: createOrders() }; }`,
+        `interface ForeignSetupContext {
+    set(name: string, value: unknown): void;
+    assign(values: Record<string, unknown>): void;
+    publications(...args: any[]): void;
+    observability(...args: any[]): void;
+    readiness(...args: any[]): void;
+}
+export function setup(ctx: ForeignSetupContext) { return { orders: createOrders() }; }`,
+    ];
+    for (const source of invalid) {
+        write("api/+setup.ts", `import { createOrders } from "$modules/orders/facade";\n${source}`);
+        const { p, text } = messages(root);
+        assert.ok(p.architecture.some(error => error.code === "BORING113" && error.file?.fileName === join(root, "api/+setup.ts")), text);
+        assert.match(text, /Preserve the generated\/Core SetupContext type/);
+    }
 }));
 
 it("rejects unused jobs importing services/adapters/facades, aliases, re-exports and literal CommonJS bypasses", () => fixture((root, write) => {

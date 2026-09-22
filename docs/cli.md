@@ -19,6 +19,7 @@ boring inspect                 # find existing routes, operations, schemas and h
 boring inspect --json          # the same catalog in a versioned machine-readable format
 boring build                   # check and compile the consumer application
 boring start                   # start the last successful build without a watcher
+boring publisher               # run the compiled transactional-outbox publisher
 ```
 
 Source commands default to the API directory `./api`. Pass another source path
@@ -57,24 +58,35 @@ dependencies in the deployment and run the generated entry point:
 ```bash
 npm ci --omit=dev
 node dist/boring-start.cjs
+node dist/boring-publisher.cjs # separate process when publications are configured
 # Optional: PORT=3000 node dist/boring-start.cjs
 ```
 
-Every successful build writes `boring-start.cjs` in its output directory. It starts
+Every successful build writes `boring-start.cjs`, `boring-worker.cjs`,
+`boring-scheduler.cjs`, `boring-schedule-worker.cjs`, `boring-consumer.cjs`,
+`boring-publisher.cjs` and `boring-command.cjs` in its output directory. They start
 the selected API, resolves compiled routes relative to itself, and uses `PORT`
 (default 4040). Source files, generated types, TypeScript configuration, the CLI,
 `typescript` and `ts-node` are not required. For a custom `outDir`, adjust the start
 script, for example `node release/server/boring-start.cjs`. The filename
-`boring-start.cjs` and the metadata file `.boring-build.json` are reserved;
+these `boring-*.cjs` process files and the metadata file `.boring-build.json` are reserved;
 conflicting compiler output, including directories at these paths, is rejected before
 replacing the previous build. Custom application servers can instead use
 `BoringApi.createApp()` or `listen()` from their compiled JavaScript entry point.
 Keep source compiler registration in a separate development bootstrap.
-The generated entry point wires `SIGINT`/`SIGTERM` to the application owner's
-`close()`. Resources registered by setup are drained and disposed according to the
-[lifecycle contract](lifecycle.md). Custom servers must wire their own signals.
+Every generated process installs its `SIGINT`/`SIGTERM` handlers before setup.
+An early signal prevents work or listener admission once setup returns, then closes
+the application owner. The process awaits `application.closed` even if the bounded
+`close()` call times out, so resources remain owned until work and cleanup actually
+settle according to the [lifecycle contract](lifecycle.md). Because a pending Promise
+does not by itself retain Node's event loop, a bootstrap keeps a referenced handle
+from bootstrap entry through eventual lifecycle settlement; this also owns an early
+signal while `createApp()` is still pending. The supervisor retains the final SIGKILL
+policy. Custom servers must provide the same ownership behavior.
 
-`boring start` remains a convenience when the development CLI is installed. It
+The direct CLI runtime commands use the same referenced process hold, pending-listen
+shutdown classification, runtime listener-error ownership and eventual cleanup wait
+as generated processes. `boring start` remains a convenience when the development CLI is installed. It
 selects the last successful build using `.boring/build.json`, or `./dist` if that
 reference is absent. It reads the build's `.boring-build.json`. Explicit targets:
 
@@ -178,20 +190,78 @@ selected API directory; direct `boring add` commands still default to `api`.
 ```ts
 // server.ts in the consumer application
 import { join } from "path";
-import { BoringApi } from "@boringapi/core";
+import type { Server } from "node:http";
+import { BoringApi, ExecutionError, LifecycleError, type Application } from "@boringapi/core";
+
+let application: Application | undefined;
+let stopping = false;
+let closing: Promise<void> | undefined;
+let signalReceived!: () => void;
+const stopped = new Promise<void>(resolve => { signalReceived = resolve; });
+const processHold = setInterval(() => {}, 2_147_483_647);
+let runtimeServer: Server | undefined;
+const runtimeFailures: unknown[] = [];
+
+function addFailure(errors: unknown[], error: unknown) {
+    if (!errors.includes(error)) errors.push(error);
+}
+async function closeApplication(owner: Application) {
+    const failures: unknown[] = [];
+    try { await owner.close(); } catch (error) { addFailure(failures, error); }
+    try { await owner.closed; } catch (error) { addFailure(failures, error); }
+    if (failures.length) throw lifecycleFailure(
+        "Shutdown wait and eventual cleanup failed", failures);
+}
+function settleApplication() {
+    if (!application) return Promise.resolve();
+    // Publish first: close() may synchronously cause another stop notification.
+    if (!closing) {
+        const owner = application;
+        closing = Promise.resolve().then(() => closeApplication(owner));
+    }
+    return closing;
+}
+function lifecycleFailure(message: string, errors: readonly unknown[]) {
+    if (errors.length === 1) return errors[0];
+    const combined = new LifecycleError(message, errors);
+    return combined.errors.length === 1 ? combined.errors[0] : combined;
+}
+const stop = () => {
+    stopping = true;
+    signalReceived();
+    if (application) void settleApplication().catch(() => {});
+};
+const runtimeError = (error: Error) => { addFailure(runtimeFailures, error); stop(); };
+for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, stop);
 
 async function main() {
-    const app = await new BoringApi().createApp(join(__dirname, "api"));
-    await app.listen(4040);
-    for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => {
-        void app.close().catch(error => { console.error(error); process.exitCode = 1; });
-    });
+    application = await new BoringApi().createApp(join(__dirname, "api"));
+    if (stopping) return;
+    try { runtimeServer = await application.listen(4040, undefined, runtimeError); }
+    catch (error) {
+        if (!(stopping && error instanceof ExecutionError && error.code === "unavailable")) throw error;
+    }
+    if (runtimeServer) await stopped;
 }
 
-main().catch(error => {
-    console.error(error);
-    process.exitCode = 1;
-});
+(async () => {
+    const failures: unknown[] = [];
+    try { await main(); } catch (error) { addFailure(failures, error); }
+    try { if (application) await settleApplication(); } catch (error) { addFailure(failures, error); }
+    // application.closed settles only after Core removes its owned listener.
+    try {
+        try { for (const signal of ["SIGINT", "SIGTERM"] as const) process.off(signal, stop); }
+        finally { clearInterval(processHold); }
+    } catch (error) { addFailure(failures, error); }
+    // Core's application.closed owns listener failures. Adding the callback
+    // observations afterwards is a fallback; LifecycleError removes identical
+    // nested causes by object identity, so they are not reported twice.
+    for (const error of runtimeFailures) addFailure(failures, error);
+    if (failures.length) {
+        console.error(lifecycleFailure("Server runtime/startup and cleanup failed", failures));
+        process.exitCode = 1;
+    }
+})();
 ```
 
 `createApp(directory)` returns an application owner with an Express adapter at
@@ -330,3 +400,8 @@ to reuse an inspected facade. `boring dev --worker` checks and watches source jo
 migrations, grants, retries and shutdown.
 
 Schedules, event consumers and application commands use the complete [trigger contract](triggers.md), including setup grants, PostgreSQL migration, static checks, generation and separate compiled process startup.
+
+Transactional publication uses `boring dev --publisher` for checked source work,
+`boring publisher` as the CLI convenience for compiled output, and
+`node dist/boring-publisher.cjs` in production. It is a separate process with no
+HTTP listener or compiler dependency. See [reliable publication](publications.md).

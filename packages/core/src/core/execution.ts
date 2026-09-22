@@ -9,9 +9,9 @@ export interface ExecutionIdentity {
 
 declare const executionBrand: unique symbol;
 const contexts = new WeakSet<object>();
-/** Internal capability check for enqueueing; shape-compatible objects are not trusted. */
+/** Internal capability check for framework effects; shape-compatible objects are not trusted. */
 export function assertExecution(context: ExecutionContext): void {
-    if (!contexts.has(context)) throw new TypeError("Enqueue requires a framework-created execution context");
+    if (!contexts.has(context)) throw new TypeError("Operation requires a framework-created execution context");
     context.throwIfAborted();
 }
 /** A framework-owned capability, never application data or a factory dependency. */

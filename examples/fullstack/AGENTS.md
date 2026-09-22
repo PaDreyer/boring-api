@@ -30,6 +30,18 @@ The specifics below supplement the shared workflow.
 - Permissions belong in both route declarations and business operations. The
   environment-controlled bearer-token provider is a demo, not production login.
 - Jobs in `jobs/orders/create/job.ts` reuse `orders.create`. Queued payloads require requestId; preserve the order/audit/idempotency transaction and explicit worker grants. Run migrations explicitly, then use separate HTTP and worker processes. See the shared job reference.
+- New orders also stage `orders.created` through the typed publication port inside
+  that same transaction. Preserve the stable event ID, separate publisher process,
+  event-ingress deduplication and idempotent `orders.observeCreated` consumer. Do not
+  move publication after commit or claim exactly-once/order guarantees. Successful
+  outbox pruning is an explicit operator action; see `docs/publications.md`.
+- All event declarations share one claim lane and one setup identity. Every scaled
+  consumer therefore needs the union of their business grants; do not deploy
+  create-only and observe-only consumers against the same queue.
+- Setup owns the JSON-Line operational adapter and PostgreSQL readiness probe. Keep
+  telemetry non-blocking, labels bounded, health independent of dependencies and
+  adapter flush before pool cleanup. The custom server owns `/health/live`,
+  `/health/ready` and `/metrics`; see `docs/operations.md`.
 - Run the fullstack check/build scripts and repository checks. Set
   `BORING_TEST_DATABASE_URL` to an isolated test database to include the real
   PostgreSQL test in `pnpm test`; it creates and removes its own random schema.

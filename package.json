@@ -6,7 +6,7 @@
     "build": "pnpm --filter \"./packages/*\" -r run build",
     "dev": "pnpm --filter \"./packages/*\" -r --parallel run dev",
     "typecheck": "pnpm -r run typecheck",
-    "test": "node scripts/check-workspaces.js && pnpm -r run test",
+    "test": "node scripts/check-workspaces.js && node --test scripts/*.test.js && pnpm -r run test",
     "check": "pnpm build && pnpm typecheck && pnpm test",
     "example:dev": "pnpm --filter @boringapi/example-basic dev",
     "example:check": "pnpm --filter @boringapi/example-basic check",

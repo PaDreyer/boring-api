@@ -97,9 +97,10 @@ Core and ordinary Node, without CLI or TypeScript.
 See the [basic example](examples/basic/README.md) and the
 [fullstack example](examples/fullstack/README.md). The PostgreSQL integration tests
 require `BORING_TEST_DATABASE_URL` pointing to an isolated test database; without
-it, those tests are skipped. Completion of durable-job acceptance requires them.
-CI provides an isolated PostgreSQL service. The tarball checker requires this URL
-for its compiled worker proof, including runtime adapter installation and SIGTERM cleanup.
+it, those tests are skipped. Completion of durable-job and publication acceptance
+requires them. CI provides an isolated PostgreSQL service. The tarball checker
+requires this URL for its compiled worker/publisher proof, including runtime adapter
+installation, outbox recovery and SIGTERM cleanup.
 
 ## Documentation and package checks
 

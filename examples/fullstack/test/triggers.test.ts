@@ -12,9 +12,9 @@ it("preserves the same order/audit/idempotency transaction across HTTP, job, eve
     const admin = new Pool({ connectionString: process.env.BORING_TEST_DATABASE_URL }); await admin.query(`CREATE SCHEMA ${schema}`);
     const url = new URL(process.env.BORING_TEST_DATABASE_URL!); url.searchParams.set("options", `-csearch_path=${schema}`);
     const db = createDatabase({ connectionString: url.toString() }), sql = new Pool({ connectionString: url.toString() });
-    const env = { DATABASE_URL: url.toString(), BORING_API_TOKEN: randomUUID(), BORING_COMMAND_PERMISSIONS: "orders:create", BORING_EVENT_PERMISSIONS: "orders:create", BORING_SCHEDULE_PERMISSIONS: "orders:create" };
+    const env = { DATABASE_URL: url.toString(), BORING_API_TOKEN: randomUUID(), BORING_COMMAND_PERMISSIONS: "orders:create", BORING_EVENT_PERMISSIONS: "orders:create,orders:observe", BORING_SCHEDULE_PERMISSIONS: "orders:create" };
     const apps: Awaited<ReturnType<BoringApi["createApp"]>>[] = [];
-    const start = async (permissions = "orders:create") => { const app = await new BoringApi().createApp<Services>(join(__dirname, "../api"), { env: { ...env, BORING_COMMAND_PERMISSIONS: permissions, BORING_EVENT_PERMISSIONS: permissions, BORING_SCHEDULE_PERMISSIONS: permissions } }); apps.push(app); return app; };
+    const start = async (permissions?: string) => { const app = await new BoringApi().createApp<Services>(join(__dirname, "../api"), { env: permissions === undefined ? env : { ...env, BORING_COMMAND_PERMISSIONS: permissions, BORING_EVENT_PERMISSIONS: permissions, BORING_SCHEDULE_PERMISSIONS: permissions } }); apps.push(app); return app; };
     try {
         await db.migrate(); const app = await start(); const listener = await app.listen(0);
         const base = `http://127.0.0.1:${(listener.address() as import("node:net").AddressInfo).port}`;
@@ -27,6 +27,9 @@ it("preserves the same order/audit/idempotency transaction across HTTP, job, eve
         const event = { id: randomUUID(), type: "orders.create-requested", version: 1, payload: input };
         const receipt = await app.acceptEvent(trusted, event); assert.equal((await app.runJob({ kind: "event" }))?.status, "succeeded");
         assert.deepEqual(await app.acceptEvent(trusted, event), receipt);
+        assert.equal((await app.runJob({ kind: "publication" }))?.status, "succeeded");
+        assert.equal((await app.runJob({ kind: "event" }))?.status, "succeeded");
+        assert.equal((await sql.query("SELECT count(*)::int n FROM order_created_projections")).rows[0].n, 1);
         for (const table of ["orders", "order_events", "order_requests"]) assert.equal((await sql.query(`SELECT count(*)::int n FROM ${table}`)).rows[0].n, 1);
         // Business commit was successful, but event confirmation was lost: fresh owner repeats safely.
         await sql.query("UPDATE boring_jobs SET status='running', attempt=1, lease_token=gen_random_uuid(), lease_until=clock_timestamp()-interval '1 second' WHERE id=$1", [receipt.deliveries[0]]);

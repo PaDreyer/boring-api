@@ -25,6 +25,13 @@ it("checks the fullstack application and prevents HTTP-free permission bypass th
     const cli = join(require.resolve("@boringapi/cli/package.json"), "../bin/boring.cjs");
     const checked = spawnSync(process.execPath, [cli, "check"], { cwd: application, encoding: "utf8" });
     assert.equal(checked.status, 0, checked.stdout + checked.stderr);
+    const inspected = spawnSync(process.execPath, [cli, "inspect", "--json"], { cwd: application, encoding: "utf8" });
+    assert.equal(inspected.status, 0, inspected.stdout + inspected.stderr);
+    const catalog = JSON.parse(inspected.stdout);
+    assert.equal(catalog.schemaVersion, 6);
+    assert.equal(catalog.lifecycle.publications.length, 1);
+    assert.equal(catalog.lifecycle.observability.length, 1);
+    assert.equal(catalog.lifecycle.readiness.length, 1);
     const { createOrders } = await import("../modules/orders/facade");
     const { createPages } = await import("../web/server/pages");
     let calls = 0;
@@ -44,19 +51,20 @@ it("runs order rules and audit writes through the transaction port", async () =>
     const orders = createOrders({
         async transaction(_execution, operation) {
             transactions++;
-            return operation({
+            return operation({ store: {
                 newId: randomUUID,
                 async reserve() { return undefined; },
                 async remember() {},
                 async insert(value) { records.set(value.id, value); writes.push("order"); },
                 async recordCreation(_value, actorId) { writes.push(`audit:${actorId}`); },
                 async find(id) { return records.get(id); },
-            });
+                async observeCreated() {},
+            }, publications: { async created() { writes.push("publication"); } } });
         },
     });
     const actor = { kind: "user" as const, id: "operator", permissions: ["orders:create", "orders:read"] as const };
     const created = await execute(actor, ctx => orders.create(ctx, { item: "Notebook", quantity: 2 }));
-    assert.deepEqual(writes, ["order", "audit:operator"]);
+    assert.deepEqual(writes, ["order", "audit:operator", "publication"]);
     assert.deepEqual(await execute(actor, ctx => orders.get(ctx, created.id)), created);
     await assert.rejects(execute(actor, ctx => orders.get(ctx, randomUUID())), { code: "not_found" });
     assert.equal(transactions, 3);
@@ -87,7 +95,7 @@ it("persists API and page results in PostgreSQL, rolls back failed business writ
     let owned: Awaited<ReturnType<BoringApi["createApp"]>> | undefined;
     try {
         await Promise.all([database.migrate(), database.migrate()]);
-        assert.equal((await inspect.query("SELECT count(*)::int AS count FROM boring_migrations")).rows[0].count, 4);
+        assert.equal((await inspect.query("SELECT count(*)::int AS count FROM boring_migrations")).rows[0].count, 6);
         const created = await execute(actor, ctx => orders.create(ctx, { item: "<script>alert(1)</script>", quantity: 2 }));
         const restarted = createDatabase({ connectionString: url });
         try { assert.deepEqual(await execute(actor, ctx => createOrders(restarted.orders).get(ctx, created.id)), created); }

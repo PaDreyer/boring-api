@@ -1,7 +1,7 @@
 import type { Inspection } from "@boringapi/analyzer";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { it } from "node:test";
@@ -39,7 +39,7 @@ it("prints one stable JSON document and refuses invalid contracts and unused arc
         const good = cli(root, ["inspect", "--dir", "api", "--json"]);
         assert.equal(good.status, 0, good.stderr);
         const result: Inspection = JSON.parse(good.stdout);
-        assert.equal(result.schemaVersion, 5);
+        assert.equal(result.schemaVersion, 6);
         assert.equal(result.routes[0].path, "/");
         assert.equal(result.routes[0].source.file, "api/get.ts");
         assert.ok(!good.stdout.includes(root));
@@ -51,6 +51,17 @@ it("prints one stable JSON document and refuses invalid contracts and unused arc
         assert.equal(violation.status, 1);
         assert.equal(violation.stdout, "");
         assert.match(violation.stderr, /BORING104/);
+        assert.match(violation.stderr, /modules\/unused\/facade\.ts/);
+        assert.doesNotMatch(violation.stderr, /\.\.\/boring-inspect-/);
+        const physical = realpathSync(root);
+        const alias = `${physical}-alias`;
+        symlinkSync(physical, alias, "dir");
+        try {
+            const aliased = cli(alias);
+            assert.equal(aliased.status, 1);
+            assert.match(aliased.stderr, /modules\/unused\/facade\.ts/);
+            assert.doesNotMatch(aliased.stderr, /\.\.\/boring-inspect-/);
+        } finally { unlinkSync(alias); }
         rmSync(join(root, "modules"), { recursive: true });
         write(root, "api/get.ts", 'export const handler = 42;');
         const contract = cli(root);

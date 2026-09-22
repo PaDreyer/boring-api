@@ -2,9 +2,9 @@ import { createHash } from "crypto";
 import { z, ZodTypeAny } from "zod";
 import { duration, ExecutionContext, ExecutionIdentity, ExecutionOptions, identitySnapshot, snapshot } from "./execution";
 import { JobAdapter, JobAttemptResult, JobContext, JobDeclaration, jobJson, JobOrigin, JobPolicy, JobRuntime, JsonValue, StoredJob, validateJobPolicy, WorkerOptions } from "./jobs";
-import type { Application } from "./lifecycle";
+import type { ApplicationRuntime } from "./lifecycle";
 
-export type DeliveryKind = "job" | "schedule" | "event";
+export type DeliveryKind = "job" | "schedule" | "event" | "publication";
 export interface ScheduleTiming {
     /** UTC Unix milliseconds, inclusive first occurrence. No local-calendar/DST rules. */
     readonly startAt: number;
@@ -152,35 +152,39 @@ export class TriggerRuntime {
         if (this.commandOptions) throw new Error("Configure commands only once");
         this.commandOptions = configured(options);
     }
-    attempt(application: Application<any>, kind: "schedule" | "event", options: WorkerOptions): Promise<JobAttemptResult | undefined> {
+    attempt(application: ApplicationRuntime<any>, kind: "schedule" | "event", options: WorkerOptions): Promise<JobAttemptResult | undefined> {
         const queue = this.queues.get(kind);
         if (!queue) throw new Error(`Configure ctx.${kind}s(adapter, { identity }) in setup`);
-        return queue.runtime.attempt(application, options);
+        return queue.runtime.attempt(application, options, kind);
     }
-    async accept(application: Application<any>, options: ExecutionOptions, event: EventMetadata & { readonly payload: unknown }): Promise<EventReceipt> {
+    private async ingress(execution: ExecutionContext, provenance: JobOrigin, event: EventMetadata & { readonly payload: unknown }): Promise<EventReceipt> {
         const queue = this.queues.get("event");
         if (!queue) throw new Error("Configure ctx.events in setup");
-        return application.execute(options, async ({ execution }) => {
-            const meta = eventSchema.parse({ id: event.id, type: event.type, version: event.version }); // Select metadata; payload cannot establish identity or tenant.
-            meta.id = meta.id.toLowerCase();
-            const matches = [...this.declarations.events].filter(([, declaration]) => declaration.event.type === meta.type && declaration.event.version === meta.version);
-            if (!matches.length) throw new TriggerError([...this.declarations.events.values()].some(d => d.event.type === meta.type) ? "incompatible_event" : "unknown_event", `No consumer for ${meta.type} version ${meta.version}`);
-            const wire = jobJson(event.payload);
-            const provenance = origin(execution);
-            const jobs: StoredJob[] = [];
-            for (const [name, declaration] of matches) {
-                await parsed(declaration.payload, wire);
-                jobs.push({ id: triggerId("event", provenance.tenantId ?? "", meta.type, meta.id, name), name: `@event/${name}`, version: declaration.version,
-                    payload: { data: wire, metadata: meta }, origin: provenance, policy: declaration.policy });
-            }
-            execution.throwIfAborted();
-            return queue.adapter.acceptEvent({ ...meta, payload: wire, origin: provenance }, jobs);
-        });
+        const meta = eventSchema.parse({ id: event.id, type: event.type, version: event.version }); // Select metadata; payload cannot establish identity or tenant.
+        meta.id = meta.id.toLowerCase();
+        const matches = [...this.declarations.events].filter(([, declaration]) => declaration.event.type === meta.type && declaration.event.version === meta.version);
+        if (!matches.length) throw new TriggerError([...this.declarations.events.values()].some(d => d.event.type === meta.type) ? "incompatible_event" : "unknown_event", `No consumer for ${meta.type} version ${meta.version}`);
+        const wire = jobJson(event.payload);
+        const jobs: StoredJob[] = [];
+        for (const [name, declaration] of matches) {
+            await parsed(declaration.payload, wire);
+            jobs.push({ id: triggerId("event", provenance.tenantId ?? "", meta.type, meta.id, name), name: `@event/${name}`, version: declaration.version,
+                payload: { data: wire, metadata: meta }, origin: provenance, policy: declaration.policy });
+        }
+        execution.throwIfAborted();
+        return queue.adapter.acceptEvent({ ...meta, payload: wire, origin: provenance }, jobs);
     }
-    async tick(application: Application<any>): Promise<readonly ScheduleOccurrence[]> {
+    async accept(application: ApplicationRuntime<any>, options: ExecutionOptions, event: EventMetadata & { readonly payload: unknown }): Promise<EventReceipt> {
+        return application.executeObserved("event-ingress", options, async ({ execution }) => this.ingress(execution, origin(execution), event));
+    }
+    /** Publisher attempts retain original provenance but never reuse its grants. */
+    publish(execution: ExecutionContext, provenance: JobOrigin, event: EventMetadata & { readonly payload: unknown }): Promise<EventReceipt> {
+        return this.ingress(execution, provenance, event);
+    }
+    async tick(application: ApplicationRuntime<any>): Promise<readonly ScheduleOccurrence[]> {
         const queue = this.queues.get("schedule");
         if (!queue) throw new Error("Configure ctx.schedules in setup");
-        return application.execute(queue.options, async ({ execution }) => {
+        return application.executeObserved("scheduler", queue.options, async ({ execution }) => {
             const occurrences: ScheduleOccurrence[] = [];
             for (const [name, declaration] of this.declarations.schedules) {
                 await parsed(declaration.payload, declaration.input);
@@ -190,11 +194,11 @@ export class TriggerRuntime {
             return occurrences;
         });
     }
-    async command(application: Application<any>, name: string, input: unknown, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<JsonValue> {
+    async command(application: ApplicationRuntime<any>, name: string, input: unknown, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<JsonValue> {
         const declaration = this.declarations.commands.get(name);
         if (!declaration) throw new TriggerError("unknown_command", `Unknown application command: ${name}`);
         if (!this.commandOptions) throw new Error("Configure ctx.commands({ identity }) in setup");
-        return application.execute({ ...this.commandOptions, signal: options.signal, timeoutMs: Math.min(duration(options.timeoutMs ?? declaration.timeoutMs, "Command timeout"), declaration.timeoutMs) }, async ({ execution, services }) => {
+        return application.executeObserved("command", { ...this.commandOptions, signal: options.signal, timeoutMs: Math.min(duration(options.timeoutMs ?? declaration.timeoutMs, "Command timeout"), declaration.timeoutMs) }, async ({ execution, services }) => {
             const value = await parsed(declaration.input, input);
             execution.throwIfAborted();
             const result = await declaration.handler(Object.freeze({ execution, services, input: value }));

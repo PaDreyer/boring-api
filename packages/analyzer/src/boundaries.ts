@@ -4,12 +4,14 @@ import { canonicalPath, applicationRole, RoleSource } from "@boringapi/core/conv
 import { declarationOf, isTypeOnlyExport, moduleExports, originalSymbol, symbolType } from "@boringapi/compiler";
 import type { ArchitectureDiagnostic } from "./architecture";
 import { typeOnlyDependency } from "./type-dependencies";
+import { setupBindingMatcher } from "./setup-bindings";
 
 type FunctionBody = ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFunction | ts.MethodDeclaration;
 
 /** Value boundaries are deliberately a small, inspectable composition language. */
 export function checkBoundaries(program: ts.Program, apiDirectory: string, sources: ts.SourceFile[]): ArchitectureDiagnostic[] {
     const checker = program.getTypeChecker();
+    const setupBindings = setupBindingMatcher(program, sources.find(source => applicationRole(apiDirectory, source.fileName).role === "setup"));
     const coreSource = program.getSourceFiles().find(file => canonicalPath(file.fileName) === canonicalPath(require.resolve("@boringapi/core").replace(/\.js$/, ".d.ts")));
     const contextExport = coreSource && moduleExports(checker, coreSource).find(symbol => symbol.name === "ExecutionContext");
     const contextSymbol = contextExport && originalSymbol(checker, contextExport);
@@ -794,6 +796,9 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
     }
     function setup(fn: FunctionBody) {
         applicationScopes.add(fn);
+        if (fn === setupBindings.setup && setupBindings.parameter && !setupBindings.parameterContract) {
+            report(setupBindings.parameter, "BORING113", "Preserve the generated/Core SetupContext type on the setup parameter. Any, unknown and foreign structural substitutes hide mandatory setup bindings from checks and inspection.");
+        }
         for (const expression of returns(fn)) {
             exposureObject(expression);
         }
@@ -812,13 +817,12 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
         }
     }
     function setupSetter(type: ts.Type): "set" | "assign" | undefined {
-        for (const signature of type.getCallSignatures()) {
-            const declaration = signature.declaration;
-            if (declaration && ts.isMethodDeclaration(declaration) && ts.isClassDeclaration(declaration.parent) &&
-                declaration.parent.name?.text === "SetupContext" && ts.isIdentifier(declaration.name) &&
-                (declaration.name.text === "set" || declaration.name.text === "assign")) return declaration.name.text;
-        }
-        return undefined;
+        const method = setupBindings.method(type);
+        return method === "set" || method === "assign" ? method : undefined;
+    }
+    function operationalBinding(type: ts.Type): "publications" | "observability" | "readiness" | undefined {
+        const method = setupBindings.method(type);
+        return method === "publications" || method === "observability" || method === "readiness" ? method : undefined;
     }
     type CapabilityLoss = "data" | "setter" | undefined;
     interface ConversionState { active: Map<ts.Type, Set<ts.Type>>; remaining: number; }
@@ -929,6 +933,9 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
             containsExecutionValue(expected) && !containsExecutionValue(actual)) {
             report(node, "BORING115", "A type conversion cannot create an ExecutionContext. Forward the framework-created context from HTTP or application.execute.");
         }
+        if (setupBindings.context(actual) && !setupBindings.context(expected)) {
+            report(node, "BORING113", "Do not erase or structurally replace SetupContext. Keep its Core type and call setup bindings directly on the setup parameter.");
+        }
         const loss = capabilityLoss(actual, expected);
         if (loss) report(node, loss === "setter" ? "BORING113" : "BORING112", loss === "setter"
             ? "Do not hide setup setters behind another callable contract. Preserve SetupContext and call its setters directly."
@@ -951,7 +958,10 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
             const member = property ? checker.getTypeOfSymbolAtLocation(property, entry) :
                 array ? checker.getIndexTypeOfType(type, ts.IndexKind.Number) : undefined;
             if (!member) return;
-            if (setupSetter(member)) report(entry, "BORING113", "Do not destructure or alias setup setters. Call ctx.set or ctx.assign directly with approved operations or data.");
+            const setter = setupSetter(member);
+            const binding = operationalBinding(member);
+            if (setter) report(entry, "BORING113", "Do not destructure or alias setup setters. Call ctx.set or ctx.assign directly with approved operations or data.");
+            else if (binding) report(entry, "BORING113", `Do not destructure or alias ctx.${binding}. Call the operational setup binding directly so inspection and checks share one static model.`);
             else setterPattern(target, member);
         });
     }
@@ -1287,6 +1297,7 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
             }
             if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node))) {
                 const setter = setupSetter(checker.getTypeAtLocation(node));
+                const binding = setupBindings.access(node);
                 if (setter) {
                     const call = node.parent;
                     if (!ts.isCallExpression(call) || call.expression !== node) {
@@ -1295,6 +1306,8 @@ export function checkBoundaries(program: ts.Program, apiDirectory: string, sourc
                     else if (!call.arguments[1] || !exposed(call.arguments[1])) {
                         report(call, "BORING113", "Imperative setup writes obey the same exposure contract: public facade/page operations or data, never raw adapters or wrappers.");
                     }
+                } else if (binding && !binding.direct) {
+                    report(node, "BORING113", `Call ctx.${binding.name}(...) directly on the setup parameter, using property access or a string-literal element access. Aliases, destructuring, computed keys, casts, call, apply and bind are unsupported so inspection and checks share one static model.`);
                 }
             }
             if (ts.isBinaryExpression(node) || ts.isForOfStatement(node)) {

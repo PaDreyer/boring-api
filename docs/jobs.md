@@ -195,10 +195,11 @@ unpredictable, and are not authorization tokens. Audit attributes the actual exe
 
 Enqueue after a separate business commit is **not atomic with that commit**: enqueue
 may fail after business state has committed, or a lost response may obscure whether
-it succeeded. Use reconciliation/idempotent retries appropriate to the application.
-A general transactional outbox belongs to milestone 5 and is not implemented here.
+it succeeded. A business event that needs commit coupling uses the reserved outbox
+lane and a separate publisher process; ordinary workers never claim those intents.
+See [reliable event publication](publications.md).
 
-- `boring inspect --json`: catalog v5 includes jobs, payload types, version/policy,
+- `boring inspect --json`: catalog v6 includes jobs, payload types, version/policy,
   source locations, facade calls and the shared dependency roles. No source execution.
 - `boring add job orders/create --from orders.create --payload orders.queuedOrder`:
   finds an existing `(execution, payload)` operation and public schema, validates the

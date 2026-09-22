@@ -1,6 +1,6 @@
 import { formatHost } from "@boringapi/compiler";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { it } from "node:test";
@@ -17,7 +17,7 @@ function write(root: string, file: string, text: string) {
     writeFileSync(join(root, file), text);
 }
 function project(files: Record<string, string>, run: (root: string) => void | Promise<void>) {
-    const root = mkdtempSync(join(tmpdir(), "boring-inspect-"));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "boring-inspect-")));
     let pending = false;
     try {
         write(root, "package.json", '{"name":"inspect-consumer","private":true}');
@@ -254,7 +254,7 @@ it("rejects structural mistakes consistently before startup executes any modules
         [{ "[one]/get.js": '', "[two]/get.js": '' }, /Duplicate route/],
     ];
     for (const [files, expected] of cases) {
-        const root = mkdtempSync(join(tmpdir(), "boring-inspect-invalid-"));
+        const root = realpathSync(mkdtempSync(join(tmpdir(), "boring-inspect-invalid-")));
         try {
             write(root, "api/+setup.js", 'throw new Error("EXECUTED before structural validation");');
             for (const [file, text] of Object.entries(files)) write(root, `api/${file}`, text);

@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { existsSync } from "fs";
+import type { Server } from "http";
 import { dirname, join, resolve } from "path";
 import { formatDiagnostics } from "@boringapi/compiler";
 import { analyzeProject, synchronizeProject, formatArchitectureDiagnostics, formatInspection, inspectProject } from "@boringapi/analyzer";
-import { buildProject, startProject, startWorker } from "@boringapi/build";
-import { commandFailure, ExecutionError } from "@boringapi/core";
+import { buildProject, startWorker } from "@boringapi/build";
+import { commandFailure, ExecutionError, LifecycleError } from "@boringapi/core";
 import type { Application } from "@boringapi/core";
 import { runSourceCommand, startDevServer } from "@boringapi/dev";
 import { addEndpoint, addJob, addTrigger, addModule, initializeProject, ScaffoldResult } from "@boringapi/scaffold";
@@ -16,7 +17,7 @@ interface Arguments {
     outputDirectory?: string;
     port: number;
     json: boolean;
-    worker: boolean | "scheduler" | "schedule" | "event";
+    worker: boolean | "scheduler" | "schedule" | "event" | "publication";
     projectFile?: string;
 }
 
@@ -45,10 +46,10 @@ function parseArguments(argv: string[]): Arguments {
         } else if (value === "--worker" && command === "dev") {
             if (worker) throw new Error("Choose only one development process kind");
             worker = true;
-        } else if (["--scheduler", "--schedule-worker", "--consumer"].includes(value) && command === "dev") {
+        } else if (["--scheduler", "--schedule-worker", "--consumer", "--publisher"].includes(value) && command === "dev") {
             if (worker) throw new Error("Choose only one development process kind");
-            worker = value === "--scheduler" ? "scheduler" : value === "--consumer" ? "event" : "schedule";
-        } else if (value === "--out-dir" && ["start", "worker", "scheduler", "schedule-worker", "consumer"].includes(command)) {
+            worker = value === "--scheduler" ? "scheduler" : value === "--consumer" ? "event" : value === "--publisher" ? "publication" : "schedule";
+        } else if (value === "--out-dir" && ["start", "worker", "scheduler", "schedule-worker", "consumer", "publisher"].includes(command)) {
             outputDirectory = argument();
         } else if (value === "--json" && command === "inspect") {
             json = true;
@@ -78,6 +79,32 @@ function projectRoot(from: string): string {
     }
 }
 
+function lifecycleFailure(message: string, errors: readonly unknown[]): unknown {
+    if (!errors.length) return undefined;
+    if (errors.length === 1) return errors[0];
+    const combined = new LifecycleError(message, errors);
+    return combined.errors.length === 1 ? combined.errors[0] : combined;
+}
+
+function addFailure(errors: unknown[], error: unknown): void {
+    if (!errors.includes(error)) errors.push(error);
+}
+
+async function closeApplication(application: Application): Promise<void> {
+    const errors: unknown[] = [];
+    try { await application.close(); }
+    catch (error) { addFailure(errors, error); }
+    try { await application.closed; }
+    catch (error) { addFailure(errors, error); }
+    if (errors.length) throw lifecycleFailure("Shutdown wait and eventual cleanup failed", errors);
+}
+
+function retainProcess(): NodeJS.Timeout {
+    // Promises do not retain Node. Runtime commands own the process until setup,
+    // execution and eventual cleanup have all settled.
+    return setInterval(() => {}, 2147483647);
+}
+
 function sync(root: string, apiDirectory: string, projectFile?: string): void {
     const result = synchronizeProject(root, apiDirectory, projectFile);
     console.info(`Generated ${result.files.length} type file${result.files.length === 1 ? "" : "s"}.`);
@@ -87,14 +114,14 @@ function check(root: string, args: Arguments): number {
     const project = analyzeProject(root, args.apiDirectory, args.projectFile);
     const { diagnostics, architecture } = project;
     if (diagnostics.length) {
-        console.error(formatDiagnostics(diagnostics, root));
+        console.error(formatDiagnostics(diagnostics, project.projectRoot));
     }
-    if (architecture.length) console.error(formatArchitectureDiagnostics(architecture, root));
+    if (architecture.length) console.error(formatArchitectureDiagnostics(architecture, project.projectRoot));
     if (diagnostics.length || architecture.length) return 1;
     if (args.command === "build") {
         const built = buildProject(project);
         if (built.diagnostics.length) {
-            console.error(formatDiagnostics(built.diagnostics, root));
+            console.error(formatDiagnostics(built.diagnostics, project.projectRoot));
             return 1;
         }
         console.info(`Built application in ${built.output}.`);
@@ -114,9 +141,9 @@ Usage:
   boring add job <name> --from <service.operation> --payload <module.schema> [--dir api]
   boring add schedule|event|command <name> --from <operation> --payload <schema> [trigger options]
   boring add endpoint <path/method> [--dir api] [--from path/method]
-  boring dev [api-directory] [--port 4040] [--worker | --scheduler | --schedule-worker | --consumer]
+  boring dev [api-directory] [--port 4040] [--worker | --scheduler | --schedule-worker | --consumer | --publisher]
   boring command <name> --input '<JSON>' [--source --dir api | --out-dir dist]
-  boring scheduler | schedule-worker | consumer [--out-dir dist]
+  boring scheduler | schedule-worker | consumer | publisher [--out-dir dist]
   boring worker [compiled-api-directory] [--out-dir directory | --project tsconfig]
   boring check [api-directory]
   boring inspect [api-directory] [--json]
@@ -172,6 +199,7 @@ function scaffold(argv: string[]): void {
 }
 
 async function command(argv: string[]): Promise<void> {
+    const processHold = retainProcess();
     const cancel = new AbortController();
     const stop = () => cancel.abort();
     for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, stop);
@@ -198,8 +226,15 @@ async function command(argv: string[]): Promise<void> {
         if (source) result = await runSourceCommand(root, args.apiDirectory, name, payload, args.projectFile, cancel.signal);
         else {
             const application = await startWorker(root, { apiDirectory: args.explicitDirectory ? args.apiDirectory : undefined, outputDirectory: args.outputDirectory, projectFile: args.projectFile });
+            let failed = false, failure: unknown;
             try { result = await application.command(name, payload, { signal: cancel.signal }); }
-            finally { await application.close(); await application.closed; }
+            catch (error) { failed = true; failure = error; }
+            try { await closeApplication(application); }
+            catch (error) {
+                failure = failed ? lifecycleFailure("Command execution and cleanup failed", [failure, error]) : error;
+                failed = true;
+            }
+            if (failed) throw failure;
         }
         if (cancel.signal.aborted) throw new ExecutionError("cancelled", "Command cancelled");
         console.log(JSON.stringify(result));
@@ -207,7 +242,10 @@ async function command(argv: string[]): Promise<void> {
         const failure = commandFailure(error);
         console.error(JSON.stringify({ error: failure.error }));
         process.exitCode = failure.exitCode;
-    } finally { for (const signal of ["SIGINT", "SIGTERM"] as const) process.off(signal, stop); }
+    } finally {
+        try { for (const signal of ["SIGINT", "SIGTERM"] as const) process.off(signal, stop); }
+        finally { clearInterval(processHold); }
+    }
 }
 
 async function main(): Promise<void> {
@@ -224,33 +262,79 @@ async function main(): Promise<void> {
         case "scheduler":
         case "schedule-worker":
         case "consumer":
+        case "publisher":
         case "worker":
         case "start": {
+            const processHold = retainProcess();
             let application: Application | undefined;
+            let closing: Promise<void> | undefined;
+            let runtimeServer: Server | undefined;
             let stopping = false;
             let signalReceived!: () => void;
             const stopped = new Promise<void>(resolve => { signalReceived = resolve; });
+            const runtimeFailures: unknown[] = [];
+            const settleApplication = () => {
+                if (!application) return Promise.resolve();
+                // Publish the shared Promise before close() can synchronously
+                // re-enter through a runtime listener error.
+                if (!closing) {
+                    const owner = application;
+                    closing = Promise.resolve().then(() => closeApplication(owner));
+                }
+                return closing;
+            };
             const stop = () => {
                 stopping = true;
                 signalReceived();
                 // The awaited lifecycle below reports cleanup errors exactly once.
-                if (application) void application.close().catch(() => {});
+                if (application) void settleApplication().catch(() => {});
+            };
+            const runtimeError = (error: Error) => {
+                addFailure(runtimeFailures, error);
+                stop();
             };
             for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, stop);
+            let failed = false, failure: unknown;
             try {
-                application = await (args.command !== "start" ? startWorker : startProject)(root, {
+                application = await startWorker(root, {
                     apiDirectory: args.explicitDirectory ? args.apiDirectory : undefined,
                     outputDirectory: args.outputDirectory, projectFile: args.projectFile,
-                }, args.port);
+                });
                 if (!stopping) {
-                    if (args.command === "start") await stopped;
+                    if (args.command === "start") {
+                        try { runtimeServer = await application.listen(args.port, undefined, runtimeError); }
+                        catch (error) {
+                            // Shutdown can close a listener whose admission is still pending.
+                            if (!(stopping && error instanceof ExecutionError && error.code === "unavailable")) throw error;
+                        }
+                        if (runtimeServer) {
+                            const address = runtimeServer.address();
+                            console.info(`Listening on port ${typeof address === "object" && address ? address.port : args.port}`);
+                            await stopped;
+                        }
+                    }
                     else if (args.command === "scheduler") await application.schedule();
-                    else await application.work({ kind: args.command === "consumer" ? "event" : args.command === "schedule-worker" ? "schedule" : "job" });
+                    else await application.work({ kind: args.command === "consumer" ? "event" : args.command === "schedule-worker" ? "schedule" : args.command === "publisher" ? "publication" : "job" });
                 }
-            } finally {
-                try { if (application) { try { await application.close(); } finally { await application.closed; } } }
-                finally { for (const signal of ["SIGINT", "SIGTERM"] as const) process.off(signal, stop); }
+            } catch (error) { failed = true; failure = error; }
+            let settlementFailed = false, settlementFailure: unknown;
+            try { if (application) await settleApplication(); }
+            catch (error) { settlementFailed = true; settlementFailure = error; }
+            finally {
+                const processErrors: unknown[] = [];
+                // application.closed settles only after Core removes its owned listener.
+                try { for (const signal of ["SIGINT", "SIGTERM"] as const) process.off(signal, stop); }
+                catch (error) { addFailure(processErrors, error); }
+                finally { clearInterval(processHold); }
+                const errors: unknown[] = [];
+                if (failed) addFailure(errors, failure);
+                if (settlementFailed) addFailure(errors, settlementFailure);
+                for (const error of runtimeFailures) addFailure(errors, error);
+                for (const error of processErrors) addFailure(errors, error);
+                failure = lifecycleFailure(runtimeFailures.length && settlementFailed ? "HTTP runtime and cleanup failed" : "Runtime and cleanup failed", errors);
+                failed = errors.length > 0;
             }
+            if (failed) throw failure;
             break;
         }
         case "dev": {
@@ -267,6 +351,6 @@ async function main(): Promise<void> {
 }
 
 main().catch(error => {
-    console.error(error instanceof Error ? error.message : error);
+    console.error(error instanceof LifecycleError ? error : error instanceof Error ? error.message : error);
     process.exitCode = 1;
 });

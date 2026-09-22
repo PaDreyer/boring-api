@@ -4,6 +4,7 @@ const { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, r
 const { createRequire } = require("node:module");
 const { tmpdir } = require("node:os");
 const { dirname, join, relative, resolve, sep } = require("node:path");
+const { anchors, prose } = require("./markdown");
 
 const { packages: workspacePackages } = require("./workspaces");
 const expectedPackages = workspacePackages();
@@ -23,16 +24,6 @@ function run(command, args, cwd = temporary) {
 function tar(...args) { return run("tar", args); }
 function json(file, value) { writeFileSync(file, JSON.stringify(value, null, 2) + "\n"); }
 const documents = readdirSync(join(__dirname, "../docs")).filter(name => name.endsWith(".md")).map(name => `docs/${name}`);
-function prose(file) { return readFileSync(file, "utf8").replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, ""); }
-function anchors(file) {
-    const counts = new Map();
-    return [...prose(file).matchAll(/^#{1,6}\s+(.+)$/gm)].map(([, title]) => {
-        const slug = title.toLowerCase().replace(/[^\p{L}\p{N}_ -]/gu, "").replace(/ /g, "-");
-        const count = counts.get(slug) || 0;
-        counts.set(slug, count + 1);
-        return count ? `${slug}-${count}` : slug;
-    });
-}
 function verifyArchive(archive) {
     const entries = tar("-tzf", archive).trim().split("\n");
     for (const entry of entries) {
@@ -131,6 +122,58 @@ async function serves(directory, entry) {
         assert.match(output, /resource disposed/);
     }
 }
+async function interruptProcess(directory, entry, preload, marker, environment = env) {
+    const child = spawn(process.execPath, ["-r", preload, entry], {
+        cwd: directory, env: { ...environment, PORT: "0" }, stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    let sent = false;
+    const receive = chunk => {
+        output += chunk.toString();
+        if (!sent && output.includes(marker)) { sent = true; child.kill("SIGTERM"); }
+    };
+    child.stdout.on("data", receive);
+    child.stderr.on("data", receive);
+    const exited = new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
+    const force = setTimeout(() => child.kill("SIGKILL"), 10000);
+    try { await exited; } finally { clearTimeout(force); }
+    assert.ok(sent, `Lifecycle marker was not observed: ${marker}\n${output}`);
+    return { code: child.exitCode, signal: child.signalCode, output };
+}
+async function assertHandlelessSetupRetained(directory, entry, preload) {
+    const child = spawn(process.execPath, ["-r", preload, entry], {
+        cwd: directory, env: { ...env, PORT: "0" }, stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    let sent = false;
+    let observed;
+    const marker = new Promise(resolve => { observed = resolve; });
+    const receive = chunk => {
+        output += chunk.toString();
+        if (!sent && output.includes("handleless setup pending")) {
+            sent = true;
+            child.kill("SIGTERM");
+            observed();
+        }
+    };
+    child.stdout.on("data", receive);
+    child.stderr.on("data", receive);
+    const exited = new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
+    const observation = setTimeout(() => observed(), 5000);
+    try {
+        await marker;
+        clearTimeout(observation);
+        assert.ok(sent, output);
+        await new Promise(resolve => setTimeout(resolve, 100));
+        assert.equal(child.exitCode, null, output);
+        assert.equal(child.signalCode, null, output);
+    } finally {
+        clearTimeout(observation);
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await exited;
+    }
+    assert.equal(child.signalCode, "SIGKILL", output);
+}
 async function main() {
     let closeDatabase = async () => {};
     try {
@@ -174,6 +217,7 @@ async function main() {
         // Explicit migration action, before either HTTP or worker startup.
         await database.query(consumerRequire("@boringapi/jobs-postgres").jobMigration.sql);
         await database.query(consumerRequire("@boringapi/jobs-postgres").triggerMigration.sql);
+        await database.query(consumerRequire("@boringapi/jobs-postgres").publicationMigration.sql);
         run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund"], consumer);
         writeFileSync(join(consumer, "src/infra/lifetime.ts"), `export function acquire(fail: boolean) {
     return { close() { console.info("resource disposed"); if (fail) throw new Error("cleanup failed"); } };
@@ -217,6 +261,7 @@ export async function setup(ctx: SetupContext) {
     const jobs = ctx.jobs(queue.adapter, {identity:{kind:"machine",id:"packed-worker",permissions:[]}});
     ctx.schedules(queue.adapter, {identity:{kind:"machine",id:"packed-scheduler",permissions:[]}});
     ctx.events(queue.adapter, {identity:{kind:"machine",id:"packed-consumer",permissions:[]}});
+    ctx.publications(queue.adapter, {identity:{kind:"machine",id:"packed-publisher",permissions:[]}});
     ctx.commands({identity:{kind:"machine",id:"packed-command",permissions:[]}});
     if (ctx.config.slowSetup) { console.error("setup waiting"); await new Promise(resolve => setTimeout(resolve, 200)); }
     return { health: createHealth(), dispatch: createDispatch(jobs.for("health/check")) };
@@ -235,16 +280,68 @@ ${kind === "command" ? 'if(ctx.input.wait) {console.error("command waiting"); aw
 `);
         }
         writeFileSync(join(consumer, "src/server.ts"), `import { join } from "path";
-import { BoringApi } from "@boringapi/core";
-async function main() {
-    const app = await new BoringApi().createApp(join(__dirname, "http"));
-    const server = await app.listen(0);
-    console.info("Listening on port " + (server.address() as import("net").AddressInfo).port);
-    for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => {
-        void app.close().catch(error => { console.error(error); process.exitCode = 1; });
-    });
+import type { Server } from "node:http";
+import { BoringApi, ExecutionError, LifecycleError, type Application } from "@boringapi/core";
+
+let application: Application | undefined;
+let server: Server | undefined;
+let stopping = false;
+let closing: Promise<void> | undefined;
+let releaseStop!: () => void;
+const stopped = new Promise<void>(resolve => { releaseStop = resolve; });
+const processHold = setInterval(() => {}, 2147483647);
+const runtimeFailures: unknown[] = [];
+function addFailure(errors: unknown[], error: unknown) { if (!errors.includes(error)) errors.push(error); }
+function lifecycleFailure(message: string, errors: readonly unknown[]) {
+    if (errors.length === 1) return errors[0];
+    const combined = new LifecycleError(message, errors);
+    return combined.errors.length === 1 ? combined.errors[0] : combined;
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+async function closeApplication(owner: Application) {
+    const errors: unknown[] = [];
+    try { await owner.close(); } catch (error) { addFailure(errors, error); }
+    try { await owner.closed; } catch (error) { addFailure(errors, error); }
+    if (errors.length) throw lifecycleFailure("Shutdown wait and eventual cleanup failed", errors);
+}
+function settleApplication() {
+    if (!application) return Promise.resolve();
+    if (!closing) {
+        const owner = application;
+        closing = Promise.resolve().then(() => closeApplication(owner));
+    }
+    return closing;
+}
+const stop = () => {
+    stopping = true;
+    releaseStop();
+    if (application) void settleApplication().catch(() => {});
+};
+const runtimeError = (error: Error) => { addFailure(runtimeFailures, error); stop(); };
+for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, stop);
+
+(async () => {
+    const failures: unknown[] = [];
+    try {
+        application = await new BoringApi().createApp(join(__dirname, "http"));
+        if (!stopping) {
+            try { server = await application.listen(0, undefined, runtimeError); }
+            catch (error) {
+                if (!(stopping && error instanceof ExecutionError && error.code === "unavailable")) throw error;
+            }
+            if (server) {
+                const address = server.address() as import("net").AddressInfo;
+                console.info("Listening on port " + address.port);
+                await stopped;
+            }
+        }
+    } catch (error) { addFailure(failures, error); }
+    try { if (application) await settleApplication(); } catch (error) { addFailure(failures, error); }
+    // application.closed settles only after Core removes its owned listener.
+    for (const error of runtimeFailures) addFailure(failures, error);
+    try { for (const signal of ["SIGINT", "SIGTERM"] as const) process.off(signal, stop); }
+    finally { clearInterval(processHold); }
+    if (failures.length) throw lifecycleFailure("Custom server runtime/startup and cleanup failed", failures);
+})().catch(error => { console.error(error); process.exitCode = 1; });
 `);
         const consumerConfig = JSON.parse(readFileSync(join(consumer, "tsconfig.json"), "utf8"));
         consumerConfig.include.push("src/server.ts");
@@ -264,16 +361,16 @@ main().catch(error => { console.error(error); process.exitCode = 1; });
         // Public declaration dependencies must also resolve outside the workspace.
         writeFileSync(join(consumer, "tool-apis.ts"), Object.entries(publicApis).map(([name, method]) =>
             `import { ${method} } from "${name}"; void ${method};`).join("\n") + `
-import type { Application, ScheduleContext, EventContext, CommandContext, TriggerAdapter, ScheduleTiming, EventReceipt } from "@boringapi/core";
-import { commandFailure, validateScheduleTiming } from "@boringapi/core";
-import { triggerMigration } from "@boringapi/jobs-postgres";
+import type { Application, ScheduleContext, EventContext, CommandContext, TriggerAdapter, ScheduleTiming, EventReceipt, EventPublication, OperationalAdapter, ReadinessReport } from "@boringapi/core";
+import { commandFailure, eventPublication, validateEventPublication, validateScheduleTiming } from "@boringapi/core";
+import { publicationMigration, stagePostgresEvent, triggerMigration } from "@boringapi/jobs-postgres";
 import { addTrigger } from "@boringapi/scaffold";
 import { runSourceCommand } from "@boringapi/dev";
 declare const app: Application; declare const adapter: TriggerAdapter;
 declare const schedule: ScheduleContext<{},{}>; declare const event: EventContext<{},{}>; declare const command: CommandContext<{},{}>;
-declare const timing: ScheduleTiming; declare const receipt: EventReceipt;
-void [app.command, app.acceptEvent, app.tick, app.schedule, adapter.acceptEvent, adapter.schedule, schedule.occurrence, event.event, command.input, receipt.deliveries];
-void [commandFailure, validateScheduleTiming, timing, triggerMigration, addTrigger, runSourceCommand];
+declare const timing: ScheduleTiming; declare const receipt: EventReceipt; declare const publication: EventPublication; declare const operations: OperationalAdapter; declare const readiness: ReadinessReport;
+void [app.command, app.acceptEvent, app.tick, app.schedule, app.health, app.readiness, app.metrics, adapter.acceptEvent, adapter.schedule, schedule.occurrence, event.event, command.input, receipt.deliveries];
+void [commandFailure, eventPublication, validateEventPublication, validateScheduleTiming, timing, publication, operations, readiness, triggerMigration, publicationMigration, stagePostgresEvent, addTrigger, runSourceCommand];
 `);
         const compilerRequire = createRequire(consumerRequire.resolve("@boringapi/compiler/package.json"));
         run(process.execPath, [compilerRequire.resolve("typescript/bin/tsc"), "--noEmit", "--strict", "--esModuleInterop",
@@ -296,6 +393,64 @@ void [commandFailure, validateScheduleTiming, timing, triggerMigration, addTrigg
         assert.ok(existsSync(productionRequire.resolve("@boringapi/core/agent-guide")));
         await serves(deployment, join(deployment, "artifact/boring-start.cjs"));
         await serves(deployment, join(deployment, "artifact/server.js"));
+        const httpEntries = [join(deployment, "artifact/boring-start.cjs"), join(deployment, "artifact/server.js")];
+        const handlelessSetup = join(deployment, "handleless-setup.cjs");
+        writeFileSync(handlelessSetup, `const {BoringApi}=require("@boringapi/core");
+BoringApi.prototype.createApp=async()=>{console.error("handleless setup pending");return new Promise(()=>{});};
+`);
+        for (const entry of httpEntries) await assertHandlelessSetupRetained(deployment, entry, handlelessSetup);
+
+        const pendingListen = join(deployment, "pending-listen.cjs");
+        writeFileSync(pendingListen, `const {BoringApi,ExecutionError}=require("@boringapi/core");
+BoringApi.prototype.createApp=async()=>{let rejectListen,resolveClosed;const closed=new Promise(resolve=>{resolveClosed=resolve;});return {
+listen:()=>new Promise((_,reject)=>{rejectListen=reject;console.error("package listen pending");}),
+close:async()=>{console.error("package pending cleanup");rejectListen(new ExecutionError("unavailable","Application shut down while listening"));resolveClosed();},
+get closed(){return closed;}};};
+`);
+        for (const entry of httpEntries) {
+            const result = await interruptProcess(deployment, entry, pendingListen, "package listen pending");
+            assert.equal(result.signal, null, result.output);
+            assert.equal(result.code, 0, result.output);
+            assert.equal((result.output.match(/package pending cleanup/g) || []).length, 1, result.output);
+            assert.doesNotMatch(result.output, /Listening on port|Application shut down while listening/);
+        }
+
+        const eventualCleanup = join(deployment, "eventual-cleanup.cjs");
+        writeFileSync(eventualCleanup, `const {BoringApi,ShutdownTimeoutError}=require("@boringapi/core");const {EventEmitter}=require("node:events");
+class TestServer extends EventEmitter {address(){return {port:1};}off(name,listener){const result=super.off(name,listener);if(name==="error")console.error("package listener detached");return result;}}
+BoringApi.prototype.createApp=async()=>{let server,observer,rejectClosed;const closed=new Promise((_,reject)=>{rejectClosed=reject;});return {
+listen:async(_port,_parent,onError)=>{observer=onError;server=new TestServer();server.on("error",observer);console.error("package listener ready");return server;},
+close:async()=>{console.error("package bounded close failed");server.off("error",observer);setTimeout(()=>{console.error("package eventual cleanup failed");rejectClosed(new Error("package cleanup failure"));},25);throw new ShutdownTimeoutError();},
+get closed(){return closed;}};};
+`);
+        for (const entry of httpEntries) {
+            const result = await interruptProcess(deployment, entry, eventualCleanup, "package listener ready");
+            assert.equal(result.signal, null, result.output);
+            assert.equal(result.code, 1, result.output);
+            assert.match(result.output, /ShutdownTimeoutError/);
+            assert.match(result.output, /package cleanup failure/);
+            assert.equal((result.output.match(/package bounded close failed/g) || []).length, 1, result.output);
+            assert.equal((result.output.match(/package listener detached/g) || []).length, 1, result.output);
+            assert.ok(result.output.indexOf("package listener detached") < result.output.indexOf("package eventual cleanup failed"), result.output);
+        }
+
+        const runtimeErrors = join(deployment, "runtime-errors.cjs");
+        writeFileSync(runtimeErrors, `const {BoringApi,LifecycleError}=require("@boringapi/core");const {EventEmitter}=require("node:events");
+class TestServer extends EventEmitter {address(){return {port:1};}off(name,listener){const result=super.off(name,listener);if(name==="error")console.error("package runtime listener detached");return result;}}
+BoringApi.prototype.createApp=async()=>{let server,observer,rejectClosed;const closed=new Promise((_,reject)=>{rejectClosed=reject;});const first=new Error("package first runtime failure");const repeated=new Error("package repeated runtime failure");const second=new Error("package second runtime failure");return {
+listen:async(_port,_parent,onError)=>{observer=onError;server=new TestServer();server.on("error",observer);setImmediate(()=>{console.error("package first runtime emitted");server.emit("error",first);});return server;},
+close:async()=>{console.error("package runtime close");server.emit("error",repeated);server.emit("error",repeated);server.emit("error",second);server.off("error",observer);rejectClosed(new LifecycleError("Owned listener runtime failed",[first,repeated,second]));},
+get closed(){return closed;}};};
+`);
+        for (const entry of httpEntries) {
+            const result = await interruptProcess(deployment, entry, runtimeErrors, "package first runtime emitted");
+            assert.equal(result.signal, null, result.output);
+            assert.equal(result.code, 1, result.output);
+            for (const message of ["package first runtime failure", "package repeated runtime failure", "package second runtime failure"]) assert.match(result.output, new RegExp(message));
+            assert.equal((result.output.match(/Error: package repeated runtime failure/g) || []).length, 1, result.output);
+            assert.equal((result.output.match(/package runtime close/g) || []).length, 1, result.output);
+            assert.equal((result.output.match(/package runtime listener detached/g) || []).length, 1, result.output);
+        }
         const controlled = run(process.execPath, ["-e", `
 const assert = require("node:assert/strict");
 const { BoringApi } = require("@boringapi/core");
@@ -346,12 +501,13 @@ finally {await app.close();} })().catch(e=>{console.error(e);process.exitCode=1;
         }
         assert.equal(worker.exitCode, 0, workerOutput); assert.equal(worker.signalCode, null);
         assert.match(workerOutput, /compiled job executed/); assert.match(workerOutput, /resource disposed/);
-        const eventOutput = run(process.execPath, ["-e", `
-const {BoringApi}=require("@boringapi/core");
-(async()=>{const app=await new BoringApi().createApp(require("node:path").resolve("artifact/http"));
-try {const receipt=await app.acceptEvent({identity:{kind:"machine",id:"ingress",permissions:[]}}, {id:require("node:crypto").randomUUID(),type:"health.requested",version:1,payload:{}});console.log("delivery="+receipt.deliveries[0]);} finally {await app.close();}})().catch(e=>{console.error(e);process.exitCode=1;});
+        const publicationOutput = run(process.execPath, ["-e", `
+const {BoringApi,eventPublication}=require("@boringapi/core");const {Pool}=require("pg");const {stagePostgresEvent}=require("@boringapi/jobs-postgres");
+(async()=>{const app=await new BoringApi().createApp(require("node:path").resolve("artifact/http"));const pool=new Pool({connectionString:process.env.DATABASE_URL});
+try {const intent=await app.execute({identity:{kind:"machine",id:"business",permissions:[]},tenantId:"packed",correlationId:"packed-origin"},({execution})=>eventPublication(execution,{id:require("node:crypto").randomUUID(),type:"health.requested",version:1,payload:{}},{maxAttempts:3,retryDelayMs:10,timeoutMs:1000}));
+const client=await pool.connect();try{await client.query("BEGIN");await client.query("SET LOCAL synchronous_commit=on");await stagePostgresEvent(client,intent);await client.query("COMMIT");}finally{client.release();}console.log("publication="+intent.id);} finally {await app.close();await pool.end();}})().catch(e=>{console.error(e);process.exitCode=1;});
 `], deployment);
-        const eventId = /delivery=([a-f0-9-]+)/.exec(eventOutput)?.[1]; assert.ok(eventId);
+        const publicationId = /publication=([a-f0-9-]+)/.exec(publicationOutput)?.[1]; assert.ok(publicationId);
         async function processUntil(filename, done, expectedCode = 0, args = []) {
             const child = spawn(process.execPath, [join(deployment, `artifact/${filename}`), ...args], {cwd:deployment,env,stdio:["ignore","pipe","pipe"]});
             let output="", stderr="";child.stdout.on("data", chunk=>{output+=chunk;});child.stderr.on("data",chunk=>{output+=chunk;stderr+=chunk;});
@@ -364,6 +520,8 @@ try {const receipt=await app.acceptEvent({identity:{kind:"machine",id:"ingress",
             assert.equal(child.signalCode,null,output);assert.equal(child.exitCode,expectedCode,output);assert.match(output,/resource disposed/);
             return stderr;
         }
+        await processUntil("boring-publisher.cjs", async()=> (await database.query("SELECT status FROM boring_jobs WHERE id=$1",[publicationId])).rows[0]?.status === "succeeded");
+        const eventId = (await database.query("SELECT id FROM boring_jobs WHERE name='@event/health/check'")).rows[0]?.id; assert.ok(eventId);
         await processUntil("boring-consumer.cjs", async()=> (await database.query("SELECT status FROM boring_jobs WHERE id=$1",[eventId])).rows[0]?.status === "succeeded");
         await processUntil("boring-scheduler.cjs", async()=> (await database.query("SELECT count(*)::int n FROM boring_jobs WHERE name='@schedule/health/check'")).rows[0].n === 1);
         await processUntil("boring-schedule-worker.cjs", async()=> (await database.query("SELECT count(*)::int n FROM boring_jobs WHERE name='@schedule/health/check' AND status='succeeded'")).rows[0].n === 1);
@@ -384,7 +542,7 @@ try {const receipt=await app.acceptEvent({identity:{kind:"machine",id:"ingress",
             const activeError = await processUntil("boring-command.cjs", async output=>output.includes("command waiting"),1,["health/check",'{"wait":true}']);
             assert.equal(JSON.parse(activeError.replace("command waiting\n", "")).error.code, "internal_error");
         } finally { delete env.BORING_CHECK_SLOW_SETUP; delete env.BORING_CHECK_FAIL_CLEANUP; }
-        console.log(`All ${packages.length} tarballs verified: public APIs and declarations, documentation, CLI build, relocated HTTP/custom-server and controlled execution with cleanup, compiled durable PostgreSQL worker, event consumer, scheduler, schedule worker and command with SIGTERM cleanup, and npm ci --omit=dev without development packages.`);
+        console.log(`All ${packages.length} tarballs verified: public APIs and declarations, documentation, CLI build, relocated generated/custom HTTP ownership across handleless setup, pending listen, runtime errors and eventual cleanup, controlled execution, compiled durable PostgreSQL worker, outbox publisher, event consumer, scheduler, schedule worker and command with SIGTERM cleanup, and npm ci --omit=dev without development packages.`);
     } finally { await closeDatabase(); rmSync(temporary, { recursive: true, force: true }); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

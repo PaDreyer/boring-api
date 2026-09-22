@@ -173,9 +173,10 @@ confirmation after business commit can repeat the handler. The reference's UUID
 transaction, even across distinct event IDs or a process restart. Event IDs and
 queue receipts alone do not make business effects idempotent.
 
-Business commit plus publication/ingress is **not atomic**. This milestone provides
-atomic receipt-plus-fanout, not a universal transactional outbox. Reliable publication
-coupled to arbitrary business commits remains milestone 5.
+Calling ingress after an independent business commit is **not atomic**. Business
+transactions that must publish use the separate [transactional publication
+contract](publications.md): its publisher hands a stable event to this ingress,
+whose existing atomic fan-out and deduplication close the lost-confirmation window.
 
 ## Commands and process operation
 
@@ -219,6 +220,10 @@ so they do not contaminate stdout. Exit statuses: 0 success, 2 unknown command o
 invalid JSON/input, 3 forbidden, 124 deadline, 130 cancellation/signal, 1 other or
 cleanup failure. Unknown commands/invalid schemas do not invoke facades. Timeout and
 cancellation are cooperative; output validation also belongs to the execution.
+All five generated trigger processes retain the same top-level `code` and `message`
+shape. When a `LifecycleError` contains distinct execution, bounded-shutdown or
+eventual-cleanup failures, `error.causes` adds recursive `{ name, message, code?, causes? }`
+details instead of flattening them at the process boundary.
 Signals remain observed during cleanup: source and compiled CLI commands suppress
 success output and exit 130 when cancellation arrives there. Cleanup failure takes
 precedence and exits 1.
@@ -242,7 +247,7 @@ an early signal waits for setup and resource disposal and prevents worker admiss
 
 ## Tooling, migration and release
 
-Inspection **v5** adds `triggers` with kind/name, schemas, literal timing/event/input,
+Inspection **v6** retains `triggers` with kind/name, schemas, literal timing/event/input,
 policy, timeout, source and resolved facade calls. All tools share convention roots;
 checks/inspection/generation never execute application modules. `BORING117` covers
 new declaration contracts; existing boundary diagnostics retain their codes.
@@ -286,10 +291,12 @@ idempotency: a static request ID in generated input would reuse one business int
 across every occurrence; adapt it to `ctx.occurrence.id` when that is the desired rule.
 
 Migration: append/apply `triggerMigration`, configure exact grants, regenerate types,
-update catalog readers for v5, rebuild and deploy separate processes. The fullstack
+update catalog readers for v6, rebuild and deploy separate processes. The fullstack
 reference uses `BORING_SCHEDULE_PERMISSIONS`, `BORING_EVENT_PERMISSIONS` and
-`BORING_COMMAND_PERMISSIONS`, defaulting to **no grants**; set `orders:create`
-explicitly. Existing HTTP/job-only consumers require no new binding or migration.
+`BORING_COMMAND_PERMISSIONS`, defaulting to **no grants**. Set `orders:create` for
+schedules and commands; the shared event-consumer lane needs the union
+`orders:create,orders:observe` for its two handlers. Existing HTTP/job-only
+consumers require no new binding or migration.
 The public additions and inspection change require the next **platform minor on
 0.x**. No legacy aliases, compatibility mode, version bump, commit or publication
 is implied by implementation.

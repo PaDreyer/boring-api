@@ -1,6 +1,7 @@
 import { postgresTriggers } from "./triggers";
 export { triggerMigration } from "./triggers";
-import type { TriggerAdapter, JobAdapter, JobClaim, JobFailure, StoredJob } from "@boringapi/core";
+import { PublicationError, publicationName, validateEventPublication } from "@boringapi/core";
+import type { EventPublication, TriggerAdapter, JobAdapter, JobClaim, JobFailure, StoredJob } from "@boringapi/core";
 
 /** The narrow pg-compatible capability we borrow; public declarations need no driver types. */
 export interface PostgresConnection {
@@ -39,6 +40,30 @@ CREATE INDEX boring_jobs_failed ON boring_jobs (finished_at) WHERE status = 'fai
 `,
 } as const;
 
+/** Append after jobMigration. The outbox reuses its durable lease/fencing table. */
+export const publicationMigration = {
+    name: "boring_publications_v1",
+    sql: `CREATE INDEX boring_jobs_publications ON boring_jobs (available_at, created_at, id)
+WHERE name LIKE '@publication/%' AND status IN ('pending', 'running');`,
+} as const;
+
+/** Stage inside the caller's business transaction; this function never commits independently. */
+export async function stagePostgresEvent(client: PostgresConnection, publication: EventPublication): Promise<{ readonly id: string }> {
+    const intent = validateEventPublication(publication);
+    if (intent.name !== publicationName || intent.version !== 1) throw new PublicationError("invalid_publication", "Expected an event publication intent");
+    const inserted = await client.query(`INSERT INTO boring_jobs (id, name, version, payload, origin, policy, max_attempts)
+        VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7)
+        ON CONFLICT (id) DO NOTHING RETURNING id`, [intent.id, intent.name, intent.version, JSON.stringify(intent.payload),
+        JSON.stringify(intent.origin), JSON.stringify(intent.policy), intent.policy.maxAttempts]);
+    if (inserted.rowCount) return Object.freeze({ id: intent.id });
+    const existing = await client.query(`SELECT name = $2 AND version = $3 AND payload = $4::jsonb
+        AND origin->'identity' = $5::jsonb AND COALESCE(origin->>'tenantId', '') = $6 AS same
+        FROM boring_jobs WHERE id = $1 FOR UPDATE`, [intent.id, intent.name, intent.version, JSON.stringify(intent.payload),
+        JSON.stringify(intent.origin.identity), intent.origin.tenantId ?? ""]);
+    if (!existing.rows[0]?.same) throw new PublicationError("publication_conflict", "Publication identity already exists with different event content or producer");
+    return Object.freeze({ id: intent.id });
+}
+
 export interface JobRecord extends StoredJob {
     readonly attempt: number;
     readonly status: "pending" | "running" | "succeeded" | "failed";
@@ -64,6 +89,7 @@ export function createPostgresJobs(pool: PostgresPool): TriggerAdapter & {
     get(id: string): Promise<JobRecord | undefined>;
     failed(limit?: number): Promise<JobRecord[]>;
     retry(id: string): Promise<boolean>;
+    prunePublications(before: number, limit?: number): Promise<number>;
 } {
     return {
         ...postgresTriggers(pool),
@@ -84,7 +110,8 @@ export function createPostgresJobs(pool: PostgresPool): TriggerAdapter & {
             } finally { client.release(discard); }
         },
         async claim(leaseMs, kind = "job") {
-            const category = kind === "job" ? "name NOT LIKE '@%'" : kind === "event" ? "name LIKE '@event/%'" : kind === "schedule" ? "name LIKE '@schedule/%'" : undefined;
+            const category = kind === "job" ? "name NOT LIKE '@%'" : kind === "event" ? "name LIKE '@event/%'" :
+                kind === "schedule" ? "name LIKE '@schedule/%'" : kind === "publication" ? "name LIKE '@publication/%'" : undefined;
             if (!category) throw new TypeError("Unknown delivery kind");
             // Expired last attempts remain searchable failures, including after a process crash.
             await pool.query(`WITH expired AS (
@@ -145,6 +172,15 @@ export function createPostgresJobs(pool: PostgresPool): TriggerAdapter & {
             const result = await pool.query(`UPDATE boring_jobs SET status = 'pending', attempt = 0, available_at = clock_timestamp(),
                 finished_at = NULL, lease_token = NULL, lease_until = NULL WHERE id = $1 AND status = 'failed'`, [id]);
             return result.rowCount === 1;
+        },
+        async prunePublications(before, limit = 1000) {
+            if (!Number.isSafeInteger(before) || before < 0) throw new RangeError("Publication retention cutoff must be nonnegative Unix milliseconds");
+            if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new RangeError("Publication prune limit must be between 1 and 1000");
+            const result = await pool.query(`WITH removable AS (
+                SELECT id FROM boring_jobs WHERE name LIKE '@publication/%' AND status = 'succeeded'
+                    AND finished_at < to_timestamp($1 / 1000.0) ORDER BY finished_at, id LIMIT $2 FOR UPDATE SKIP LOCKED
+            ) DELETE FROM boring_jobs j USING removable r WHERE j.id = r.id`, [before, limit]);
+            return result.rowCount ?? 0;
         },
     };
 }

@@ -34,17 +34,17 @@ Invalid structure, contracts, types or architecture produce diagnostics on stder
 and exit status 1, with no catalog on stdout. Fix these errors and run inspection
 again. Successful `--json` output is exactly one JSON object on stdout.
 
-### JSON contract, version 5
+### JSON contract, version 6
 
 The root object contains these fields:
 
 | Field | Contents |
 | --- | --- |
-| `schemaVersion` | `5`. Breaking changes to the catalog structure increment this value; readers should ignore additional fields. |
+| `schemaVersion` | `6`. Breaking changes to the catalog structure increment this value; readers should ignore additional fields. |
 | `apiDirectory` | Selected API path relative to the consumer project root. |
 | `setup`, `auth` | Setup and authentication/authorization hook locations, or `null` when absent. |
 | `configuration` | Root config source, loader location and schema types, or `null` when absent. |
-| `lifecycle` | Application ownership, the `setup.onClose` cleanup contract and checked files in `executions/`. |
+| `lifecycle` | Application ownership, the `setup.onClose` cleanup contract, checked files in `executions/`, and source locations for setup `publications`, `observability` and `readiness` calls. |
 | `triggers` | Schedule/event/command declarations with kind, schemas, timing, event contract, schedule input, timeout, version/policy, locations and facade calls. See [trigger reference](triggers.md). |
 | `jobs` | Named declarations with payload types, literal version/policy, handler/source locations and resolved public facade calls. |
 | `routes` | Method, URL path, handler location/return types, `input`, `output`, `access`, and effective `hooks`. |
@@ -92,4 +92,4 @@ the CLI and public `inspectProject` reject projects with check errors. Imperativ
 Map writes have no inferred signatures; inspect the reported public entries for
 their implementations. The role catalog includes unused files and split role parts.
 
-Schedules, event consumers and application commands use the complete [trigger contract](triggers.md), including setup grants, PostgreSQL migration, static checks, generation and separate compiled process startup.
+Schedules, event consumers and application commands use the complete [trigger contract](triggers.md), including setup grants, PostgreSQL migration, static checks, generation and separate compiled process startup. Inspection reports publication and operational bindings without executing setup; see [publication](publications.md) and [operations](operations.md).
